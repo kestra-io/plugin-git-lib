@@ -1,10 +1,10 @@
 {
-  "name": "plugin-template",
+  "name": "plugin-git-lib",
   "build": {
     "context": ".",
     "dockerfile": "Dockerfile"
   },
-  "workspaceFolder": "/workspaces/plugin-template",
+  "workspaceFolder": "/workspaces/plugin-git-lib",
   "forwardPorts": [8080],
   "customizations": {
     "vscode": {

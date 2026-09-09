@@ -1,8 +1,8 @@
-# Kestra Template Plugin
+# Kestra Git Lib Plugin
 
 ## What
 
-- Provides plugin components under `io.kestra.plugin.templates`.
+- Provides plugin components under `io.kestra.plugin.git-lib`.
 - Includes classes such as `Example`, `Trigger`.
 
 ## Why
@@ -17,7 +17,7 @@
 
 Single-module plugin. Source packages under `io.kestra.plugin`:
 
-- `templates`
+- `git-lib`
 
 Infrastructure dependencies (Docker Compose services):
 
@@ -25,14 +25,14 @@ Infrastructure dependencies (Docker Compose services):
 
 ### Key Plugin Classes
 
-- `io.kestra.plugin.templates.Example`
+- `io.kestra.plugin.git-lib.Example`
 
 ### Project Structure
 
 ```
-plugin-template/
-├── src/main/java/io/kestra/plugin/templates/
-├── src/test/java/io/kestra/plugin/templates/
+plugin-git-lib/
+├── src/main/java/io/kestra/plugin/git-lib/
+├── src/test/java/io/kestra/plugin/git-lib/
 ├── build.gradle
 └── README.md
 ```

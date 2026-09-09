@@ -1,7 +1,7 @@
-group: io.kestra.plugin.templates
-name: "template"
-title: "Template"
-description: "Plugin template for Kestra"
+group: io.kestra.plugin.git-lib
+name: "git-lib"
+title: "Git Lib"
+description: "Git Lib plugin for Kestra"
 body: ""
 videos: []
 createdBy: "Kestra Core Team"
