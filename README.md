@@ -35,18 +35,22 @@
 </p>
 <p align="center" style="color:grey;"><i>Get started with Kestra in 3 minutes.</i></p>
 
-# Kestra Git Lib Plugin
+# plugin-git-lib
 
-## Why
-
-- What user problem does this solve? Teams need a concrete starting point for building and validating new Kestra plugins without recreating the same project scaffolding from scratch.
-- Why would a team adopt this plugin in a workflow? It gives plugin authors a ready-made reference repo they can adapt alongside their own build, test, and publishing workflow.
-- What operational/business outcome does it enable? It shortens plugin delivery time, reduces setup mistakes, and makes internal or partner plugin development more repeatable.
+Shared kernel library consumed by [`plugin-git`](https://github.com/kestra-io/plugin-git) (OSS) and
+[`plugin-ee-git`](https://github.com/kestra-io/plugin-ee-git) (Enterprise Edition). It holds the Git connection,
+authentication and clone/push/sync plumbing that both editions used to fork independently, so a fix or a security
+hardening lands once and both editions pick it up on their next dependency bump.
 
 ## What
 
-- Provides plugin components under `io.kestra.plugin.git-lib`.
-- Includes classes such as `Example`, `Trigger`.
+- Provides shared, non-registered plugin components under `io.kestra.plugin.git.shared`: `AbstractGitTask`,
+  `AbstractKestraTask`, `AbstractCloningTask`, `AbstractSyncTask`, `AbstractPushTask`, `KestraApiConnection`,
+  `KestraApiAuth`, and the `io.kestra.plugin.git.shared.services` package (`GitService`, `CloneService`,
+  `SshTransportConfigCallback`).
+- No task or trigger is registered from this repository — see `AGENTS.md` for why that invariant matters.
+- Ships a `testFixtures` source set with the Gitea/Kestra-container test scaffolding shared by both plugins' test
+  suites.
 
 ## Running Kestra locally with this plugin
 
