@@ -61,11 +61,67 @@ class AbstractGitTaskTest {
         assertThat(readField(command, "transportConfigCallback"), notNullValue());
     }
 
+    /**
+     * The safe default differs by edition: OSS never verified the host key (unchanged), while the Enterprise
+     * Edition has always defaulted to verifying it (unchanged). {@code defaultStrictHostKeyChecking()} is the
+     * overridable seam an edition-specific base class hooks into instead of every concrete task re-declaring the
+     * property with a different hardcoded default.
+     */
     @Test
-    void strictHostKeyChecking_defaultsToFalse() throws Exception {
-        var task = TestCloningTask.builder().build();
+    void defaultStrictHostKeyChecking_isFalseUnlessAnEditionOverridesIt() {
+        var ossTask = TestCloningTask.builder().build();
+        assertThat(ossTask.defaultStrictHostKeyChecking(), is(false));
 
-        assertThat(runContextFactory.of().render(task.getStrictHostKeyChecking()).as(Boolean.class).orElseThrow(), is(false));
+        var eeStyleTask = new TestCloningTask() {
+            @Override
+            protected boolean defaultStrictHostKeyChecking() {
+                return true;
+            }
+        };
+        assertThat(eeStyleTask.defaultStrictHostKeyChecking(), is(true));
+    }
+
+    @Test
+    void authentified_resolvesStrictHostKeyCheckingThroughTheDefaultHookWhenUnset() throws Exception {
+        var ossTask = TestCloningTask.builder()
+            .privateKey(Property.ofValue("dummy-pem-content"))
+            .build();
+        var eeStyleTask = new TestCloningTask() {
+            @Override
+            protected boolean defaultStrictHostKeyChecking() {
+                return true;
+            }
+        };
+        eeStyleTask.privateKey = Property.ofValue("dummy-pem-content");
+
+        var ossCommand = ossTask.authentified(Git.lsRemoteRepository(), runContextFactory.of());
+        var eeCommand = eeStyleTask.authentified(Git.lsRemoteRepository(), runContextFactory.of());
+
+        assertThat(readSshCallbackField(ossCommand, "strictHostKeyChecking"), is(false));
+        assertThat(readSshCallbackField(eeCommand, "strictHostKeyChecking"), is(true));
+    }
+
+    @Test
+    void authentified_explicitPropertyOverridesTheDefaultHook() throws Exception {
+        var eeStyleTaskWithExplicitFalse = new TestCloningTask() {
+            @Override
+            protected boolean defaultStrictHostKeyChecking() {
+                return true;
+            }
+        };
+        eeStyleTaskWithExplicitFalse.privateKey = Property.ofValue("dummy-pem-content");
+        eeStyleTaskWithExplicitFalse.strictHostKeyChecking = Property.ofValue(false);
+
+        var command = eeStyleTaskWithExplicitFalse.authentified(Git.lsRemoteRepository(), runContextFactory.of());
+
+        assertThat(readSshCallbackField(command, "strictHostKeyChecking"), is(false));
+    }
+
+    private static Object readSshCallbackField(TransportCommand<?, ?> command, String name) throws Exception {
+        Object callback = readField(command, "transportConfigCallback");
+        Field field = callback.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        return field.get(callback);
     }
 
     @Test

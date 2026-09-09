@@ -108,14 +108,12 @@ public abstract class AbstractGitTask extends Task {
 
     @Schema(
         title = "Whether to verify the SSH remote server's host key",
-        description = "When `true`, the host key presented by the Git server is verified against `knownHosts` " +
-            "(if provided) or the system/user known_hosts file, protecting against man-in-the-middle attacks. " +
-            "Default `false` to preserve the historical behavior of accepting any host key; enable it and set " +
-            "`knownHosts` for a hardened setup."
+        description = "When enabled, the host key presented by the Git server is verified against `knownHosts` " +
+            "(if provided) or the system/user known_hosts file. Disabling it exposes the connection to " +
+            "man-in-the-middle attacks (CWE-297). Set `knownHosts` alongside this property for a hardened setup."
     )
-    @Builder.Default
     @PluginProperty(group = "advanced")
-    protected Property<Boolean> strictHostKeyChecking = Property.ofValue(false);
+    protected Property<Boolean> strictHostKeyChecking;
 
     @Schema(
         title = "Known hosts file content used for SSH host key verification",
@@ -124,6 +122,18 @@ public abstract class AbstractGitTask extends Task {
     )
     @PluginProperty(group = "advanced")
     protected Property<String> knownHosts;
+
+    /**
+     * The effective {@code strictHostKeyChecking} value when the property is left unset.
+     *
+     * <p>Kept as an overridable hook (rather than a hardcoded {@code @Builder.Default}) because the safe default
+     * differs by edition: OSS never verified the host key ({@code false}, unchanged), while the Enterprise Edition
+     * has always defaulted to verifying it ({@code true}, unchanged). A thin edition-specific base class overrides
+     * this method instead of every concrete task re-declaring the property with a different default.
+     */
+    protected boolean defaultStrictHostKeyChecking() {
+        return false;
+    }
 
     @Schema(
         title = "Extra trusted CA PEM path",
@@ -379,7 +389,7 @@ public abstract class AbstractGitTask extends Task {
                 new SshTransportConfigCallback(
                     runContext.render(this.privateKey).as(String.class).orElseThrow().getBytes(StandardCharsets.UTF_8),
                     runContext.render(this.passphrase).as(String.class).orElse(null),
-                    this.strictHostKeyChecking == null || runContext.render(this.strictHostKeyChecking).as(Boolean.class).orElse(false),
+                    runContext.render(this.strictHostKeyChecking).as(Boolean.class).orElseGet(this::defaultStrictHostKeyChecking),
                     runContext.render(this.knownHosts).as(String.class).orElse(null)
                 )
             );
