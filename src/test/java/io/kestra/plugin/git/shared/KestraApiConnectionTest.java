@@ -122,6 +122,28 @@ class KestraApiConnectionTest {
         assertThat(task.kestraClient(runContextFactory.of()), notNullValue());
     }
 
+    /**
+     * A task family that must never silently proceed unauthenticated (e.g. the Enterprise Edition's
+     * {@code NamespaceSync}) overrides {@code requireKestraAuthentication()} instead of relying on the lenient
+     * OSS-oriented default.
+     */
+    @Test
+    void cloningTask_failsFastWhenRequireKestraAuthenticationIsOverridden() {
+        var task = new TestCloningTask() {
+            @Override
+            protected boolean requireKestraAuthentication() {
+                return true;
+            }
+        };
+
+        var e = assertThrows(IllegalArgumentException.class, () -> task.kestraClient(runContextFactory.of()));
+
+        assertThat(
+            e.getMessage(),
+            is("No authentication method provided. Set 'auth.apiToken', or 'auth.username' and 'auth.password', or configure a default one with the 'kestra.tasks.sdk.authentication' properties.")
+        );
+    }
+
     /** The SDK builder defaults to Basic auth, so building a client without credentials would send `Basic base64("null:null")`. */
     @Test
     void shouldFailWhenAutoIsDisabledWithoutCredentials() throws Exception {

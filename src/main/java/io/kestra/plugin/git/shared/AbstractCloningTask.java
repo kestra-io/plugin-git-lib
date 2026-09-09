@@ -46,7 +46,21 @@ public abstract class AbstractCloningTask extends AbstractGitTask {
     protected Auth auth;
 
     protected KestraClient kestraClient(RunContext runContext) throws IllegalVariableEvaluationException {
-        return KestraApiConnection.buildClient(runContext, kestraUrl, auth, false);
+        return KestraApiConnection.buildClient(runContext, kestraUrl, auth, requireKestraAuthentication());
+    }
+
+    /**
+     * Whether {@link #kestraClient(RunContext)} must throw when no authentication method resolves, instead of
+     * returning an unauthenticated client.
+     *
+     * <p>Defaults to {@code false}: some existing OSS flows point {@code Clone}/{@code Push*}/{@code Sync*}/
+     * {@code NamespaceSync} at a Kestra API that does not require authentication and rely on the unauthenticated
+     * fallback (several OSS test suites do the same). A task family that must never silently proceed
+     * unauthenticated — e.g. the Enterprise Edition's {@code NamespaceSync}, which manages namespace contents —
+     * overrides this to {@code true} instead of relying on the lenient OSS-oriented default.
+     */
+    protected boolean requireKestraAuthentication() {
+        return false;
     }
 
     protected List<String> descendantNamespaces(RunContext runContext, String tenantId, String namespace) throws IllegalVariableEvaluationException, ApiException {
