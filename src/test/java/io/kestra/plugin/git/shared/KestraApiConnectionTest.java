@@ -21,6 +21,7 @@ import jakarta.inject.Inject;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.notNullValue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /** The API URL comes from the same default SDK authentication as the credentials, so one instance-wide setting covers both. */
@@ -104,6 +105,21 @@ class KestraApiConnectionTest {
             .build();
 
         assertThat(url(task.kestraClient(runContextWithSdkUrl(task, SDK_DEFAULT_URL))), is(DEFAULT_URL));
+    }
+
+    /**
+     * Unlike {@code AbstractKestraTask} (whose {@code auth} property is mandatory and throws when nothing
+     * resolves, see {@code shouldFailWhenAutoIsDisabledWithoutCredentials} below), {@code AbstractCloningTask}'s
+     * {@code auth} is optional and currently still returns an unauthenticated client when no credential source
+     * resolves. Some existing OSS flows point {@code Clone}/{@code Push*}/{@code Sync*}/{@code NamespaceSync} at a
+     * Kestra API that does not require authentication and rely on this; aligning it with the strict
+     * {@code AbstractKestraTask} behavior is a deliberate follow-up decision, not part of this change.
+     */
+    @Test
+    void cloningTask_stillReturnsAnUnauthenticatedClientWhenNoAuthenticationResolves() throws Exception {
+        var task = cloningTask().build();
+
+        assertThat(task.kestraClient(runContextFactory.of()), notNullValue());
     }
 
     /** The SDK builder defaults to Basic auth, so building a client without credentials would send `Basic base64("null:null")`. */

@@ -2,13 +2,11 @@ package io.kestra.plugin.git.shared;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 
 import io.kestra.core.exceptions.IllegalVariableEvaluationException;
 import io.kestra.core.models.annotations.PluginProperty;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.runners.RunContext;
-import io.kestra.core.runners.SDK;
 import io.kestra.sdk.KestraClient;
 import io.kestra.sdk.internal.ApiException;
 import io.kestra.sdk.model.PagedResultsNamespace;
@@ -48,41 +46,7 @@ public abstract class AbstractCloningTask extends AbstractGitTask {
     protected Auth auth;
 
     protected KestraClient kestraClient(RunContext runContext) throws IllegalVariableEvaluationException {
-        KestraApiConnection connection = KestraApiConnection.resolve(runContext, kestraUrl, auth);
-
-        runContext.logger().debug("Kestra URL: {}", connection.url());
-
-        var builder = KestraClient.builder().url(connection.url());
-
-        if (auth != null) {
-            Optional<String> maybeApiToken = runContext.render(auth.apiToken).as(String.class);
-            Optional<String> maybeUsername = runContext.render(auth.username).as(String.class);
-            Optional<String> maybePassword = runContext.render(auth.password).as(String.class);
-            if (maybeApiToken.isPresent() && (maybeUsername.isPresent() || maybePassword.isPresent())) {
-                throw new IllegalArgumentException("Use either apiToken or username/password for authentication, not both");
-            }
-            if (maybeApiToken.isPresent()) {
-                return builder.tokenAuth(maybeApiToken.get()).build();
-            }
-            if (maybeUsername.isPresent() && maybePassword.isPresent()) {
-                return builder.basicAuth(maybeUsername.get(), maybePassword.get()).build();
-            }
-            if (maybeUsername.isPresent() || maybePassword.isPresent()) {
-                throw new IllegalArgumentException("Both username and password are required for HTTP Basic authentication");
-            }
-        }
-
-        Optional<SDK.Auth> autoAuth = connection.defaultAuth();
-        if (autoAuth.isPresent()) {
-            if (autoAuth.get().username().isPresent() && autoAuth.get().password().isPresent()) {
-                return builder.basicAuth(autoAuth.get().username().get(), autoAuth.get().password().get()).build();
-            }
-            if (autoAuth.get().apiToken().isPresent()) {
-                return builder.tokenAuth(autoAuth.get().apiToken().get()).build();
-            }
-        }
-
-        return builder.build();
+        return KestraApiConnection.buildClient(runContext, kestraUrl, auth, false);
     }
 
     protected List<String> descendantNamespaces(RunContext runContext, String tenantId, String namespace) throws IllegalVariableEvaluationException, ApiException {
@@ -122,18 +86,22 @@ public abstract class AbstractCloningTask extends AbstractGitTask {
 
     @Builder
     @Getter
+    @ToString
     @Jacksonized
     public static class Auth implements KestraApiAuth {
         @Schema(title = "Username for HTTP Basic authentication.")
         @PluginProperty(secret = true, group = "connection")
+        @ToString.Exclude
         private Property<String> username;
 
         @Schema(title = "Password for HTTP Basic authentication.")
         @PluginProperty(secret = true, group = "connection")
+        @ToString.Exclude
         private Property<String> password;
 
         @Schema(title = "API token for authentication.")
         @PluginProperty(secret = true, group = "connection")
+        @ToString.Exclude
         private Property<String> apiToken;
 
         @Schema(

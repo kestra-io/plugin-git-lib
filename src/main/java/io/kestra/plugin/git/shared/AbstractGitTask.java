@@ -80,6 +80,7 @@ public abstract class AbstractGitTask extends Task {
         description = "Used for HTTP basic authentication and as a fallback commit author."
     )
     @PluginProperty(secret = true, group = "connection")
+    @ToString.Exclude
     protected Property<String> username;
 
     @Schema(
@@ -93,6 +94,7 @@ public abstract class AbstractGitTask extends Task {
             """
     )
     @PluginProperty(secret = true, group = "connection")
+    @ToString.Exclude
     protected Property<String> password;
 
     @Schema(
@@ -100,10 +102,12 @@ public abstract class AbstractGitTask extends Task {
         description = "PEM-formatted private key matching a public key registered on the Git server. Generate with `ssh-keygen -t ecdsa -b 256 -m PEM`."
     )
     @PluginProperty(secret = true, group = "connection")
+    @ToString.Exclude
     protected Property<String> privateKey;
 
     @Schema(title = "Passphrase for `privateKey`")
     @PluginProperty(secret = true, group = "advanced")
+    @ToString.Exclude
     protected Property<String> passphrase;
 
     @Schema(

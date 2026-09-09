@@ -5,8 +5,15 @@ import io.kestra.core.models.property.Property;
 /**
  * The Kestra API connection settings a task exposes under its {@code auth} property.
  *
- * <p>Implemented by the {@code Auth} class of each task hierarchy so that the URL resolution is written once.
+ * <p>Implemented by the {@code Auth} class of each task hierarchy so that the URL resolution and the
+ * client-authentication logic are written once, in {@link KestraApiConnection}.
  */
-public interface KestraApiAuth {
+interface KestraApiAuth {
     Property<Boolean> getAuto();
+
+    Property<String> getApiToken();
+
+    Property<String> getUsername();
+
+    Property<String> getPassword();
 }
