@@ -99,27 +99,6 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
         return syncDirectory;
     }
 
-    private void checkBranchExists(RunContext runContext, GitService gitService, String renderedBranch) throws Exception {
-        if (renderedBranch == null || renderedBranch.isBlank()) {
-            return;
-        }
-
-        if (runContext.render(this.failOnMissingBranch).as(Boolean.class).orElse(true) && !gitService.branchExists(runContext, renderedBranch)) {
-            throw new IllegalArgumentException(
-                String.format(
-                    "Branch '%s' does not exist on repository '%s'. Sync tasks never create a missing branch: " +
-                        "doing so would silently sync from the repository's default branch instead, which can delete " +
-                        "namespace content that only exists on '%s' when `delete` is true. Create the branch on the " +
-                        "remote first, fix the `branch` property, or set `failOnMissingBranch` to false to accept " +
-                        "this fallback behavior.",
-                    renderedBranch,
-                    runContext.render(this.getUrl()).as(String.class).orElse(null),
-                    renderedBranch
-                )
-            );
-        }
-    }
-
     private static final List<String> PATH_TO_IGNORE = List.of(".git", ".gitignore", ".gitkeep");
 
     /**
@@ -257,7 +236,7 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
         gitService.namespaceAccessGuard(runContext, this.fetchedNamespace());
 
         String renderedBranch = runContext.render(this.getBranch()).as(String.class).orElse(null);
-        this.checkBranchExists(runContext, gitService, renderedBranch);
+        gitService.ensureBranchExistsOrFail(runContext, renderedBranch, runContext.render(this.failOnMissingBranch).as(Boolean.class).orElse(true));
 
         try (var git = gitService.cloneBranch(runContext, renderedBranch, this.cloneSubmodules)) {
             Path localGitDirectory = this.createGitDirectory(runContext);

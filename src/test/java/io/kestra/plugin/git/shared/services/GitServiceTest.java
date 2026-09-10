@@ -16,6 +16,7 @@ import jakarta.inject.Inject;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @KestraTest
 class GitServiceTest {
@@ -53,5 +54,57 @@ class GitServiceTest {
         try (Git git = gitService.cloneBranch(runContext, "new-branch", null)) {
             assertThat(git.getRepository().getBranch(), is("new-branch"));
         }
+    }
+
+    private GitService remoteWithMainBranch() throws Exception {
+        Path remote = Files.createTempDirectory("git-service-remote-");
+        try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
+            Files.writeString(remote.resolve("file.txt"), "hello\n");
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("init").call();
+        }
+        return new GitService(TestCloningTask.builder().url(Property.ofValue(remote.toUri().toString())).build());
+    }
+
+    @Test
+    void ensureBranchExistsOrFail_throwsWhenBranchMissingAndFailOnMissing() throws Exception {
+        RunContext runContext = runContextFactory.of();
+        GitService gitService = remoteWithMainBranch();
+
+        assertThrows(IllegalArgumentException.class, () -> gitService.ensureBranchExistsOrFail(runContext, "missing-branch", true));
+    }
+
+    @Test
+    void ensureBranchExistsOrFail_isNoOpWhenFailOnMissingIsFalse() throws Exception {
+        RunContext runContext = runContextFactory.of();
+        GitService gitService = remoteWithMainBranch();
+
+        gitService.ensureBranchExistsOrFail(runContext, "missing-branch", false);
+    }
+
+    @Test
+    void ensureBranchExistsOrFail_isNoOpWhenBranchIsBlank() throws Exception {
+        RunContext runContext = runContextFactory.of();
+        GitService gitService = remoteWithMainBranch();
+
+        gitService.ensureBranchExistsOrFail(runContext, null, true);
+        gitService.ensureBranchExistsOrFail(runContext, "  ", true);
+    }
+
+    @Test
+    void ensureBranchExistsOrFail_passesWhenBranchExists() throws Exception {
+        Path remote = Files.createTempDirectory("git-service-remote-");
+        String defaultBranch;
+        try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
+            Files.writeString(remote.resolve("file.txt"), "hello\n");
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("init").call();
+            defaultBranch = git.getRepository().getBranch();
+        }
+
+        RunContext runContext = runContextFactory.of();
+        GitService gitService = new GitService(TestCloningTask.builder().url(Property.ofValue(remote.toUri().toString())).build());
+
+        gitService.ensureBranchExistsOrFail(runContext, defaultBranch, true);
     }
 }
