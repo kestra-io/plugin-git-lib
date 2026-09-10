@@ -23,7 +23,7 @@ final class KestraApiConnection {
     private static final String URL_TEMPLATE = "{{ kestra.url }}";
     private static final String NO_AUTH_MESSAGE = "No authentication method provided. Set 'auth.apiToken', or " +
         "'auth.username' and 'auth.password', or configure a default one with the 'kestra.tasks.sdk.authentication' properties. " +
-        "Set 'auth.auto' to false to call a Kestra API that requires no authentication.";
+        "If this API requires no authentication, set 'auth.auto' to false and leave the credentials unset.";
 
     private final String url;
     private final DefaultAuthSupplier defaultAuth;
