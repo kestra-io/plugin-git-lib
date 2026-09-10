@@ -6,6 +6,9 @@ import java.nio.file.Path;
 import org.eclipse.jgit.api.Git;
 import org.junit.jupiter.api.Test;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.kestra.core.junit.annotations.KestraTest;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextFactory;
@@ -138,5 +141,43 @@ class CloneServiceTest {
             assertNotNull(cloned.getRepository().exactRef("refs/remotes/origin/feature/only"));
             assertNull(cloned.getRepository().exactRef("refs/remotes/origin/extra/branch"));
         }
+    }
+
+    /**
+     * {@code CloneService.clone} is the single source of the "Start cloning" log line; the consumer {@code Clone}
+     * tasks (plugin-git, plugin-ee-git) must not log it a second time, otherwise every clone logs it twice.
+     */
+    @Test
+    void logsStartCloningExactlyOnce() throws Exception {
+        Path remote = Files.createTempDirectory("clone-service-remote-");
+        try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
+            Files.writeString(remote.resolve("file.txt"), "hello\n");
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("init").call();
+        }
+
+        RunContext runContext = runContextFactory.of();
+        TestCloningTask gitTask = TestCloningTask.builder().build();
+
+        Logger logbackLogger = (Logger) runContext.logger();
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logbackLogger.addAppender(appender);
+
+        try {
+            CloneService.clone(runContext, gitTask, CloneService.CloneRequest.builder()
+                .url(remote.toUri().toString())
+                .path(runContext.workingDir().path())
+                .cloneAllBranches(true)
+                .build());
+        } finally {
+            logbackLogger.detachAppender(appender);
+        }
+
+        long startCloningLogCount = appender.list.stream()
+            .filter(event -> event.getFormattedMessage().startsWith("Start cloning"))
+            .count();
+
+        assertThat(startCloningLogCount, is(1L));
     }
 }
