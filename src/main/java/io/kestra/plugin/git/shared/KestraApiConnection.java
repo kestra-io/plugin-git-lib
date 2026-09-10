@@ -83,11 +83,11 @@ final class KestraApiConnection {
 
         Optional<SDK.Auth> autoAuth = connection.defaultAuth();
         if (autoAuth.isPresent()) {
-            if (autoAuth.get().apiToken().isPresent()) {
-                return builder.tokenAuth(autoAuth.get().apiToken().get()).build();
-            }
             if (autoAuth.get().username().isPresent() && autoAuth.get().password().isPresent()) {
                 return builder.basicAuth(autoAuth.get().username().get(), autoAuth.get().password().get()).build();
+            }
+            if (autoAuth.get().apiToken().isPresent()) {
+                return builder.tokenAuth(autoAuth.get().apiToken().get()).build();
             }
         }
 

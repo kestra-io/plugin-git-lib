@@ -16,12 +16,14 @@ import io.kestra.core.utils.TestsUtils;
 import io.kestra.plugin.git.shared.TestTasks.TestCloningTask;
 import io.kestra.plugin.git.shared.TestTasks.TestKestraTask;
 import io.kestra.sdk.KestraClient;
+import io.kestra.sdk.internal.ApiClient;
 
 import jakarta.inject.Inject;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.startsWith;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /** The API URL comes from the same default SDK authentication as the credentials, so one instance-wide setting covers both. */
@@ -56,6 +58,30 @@ class KestraApiConnectionTest {
         Object apiClient = apiClientField.get(client);
 
         return (String) apiClient.getClass().getMethod("getBasePath").invoke(apiClient);
+    }
+
+    /** Reads the `Authorization` header the client was built with, to tell Basic auth apart from Bearer/token auth. */
+    private static String authorizationHeader(KestraClient client) throws Exception {
+        Field apiClientField = KestraClient.class.getDeclaredField("apiClient");
+        apiClientField.setAccessible(true);
+        ApiClient apiClient = (ApiClient) apiClientField.get(client);
+
+        return apiClient.getDefaultHeaders().get("Authorization");
+    }
+
+    /**
+     * Same helper as {@link #runContextWithSdkUrl}, but resolving a default SDK authentication that carries both a
+     * username/password pair and an API token, to assert which one wins.
+     */
+    private RunContext runContextWithSdkBasicAndTokenAuth(Task task, String username, String password, String apiToken) throws Exception {
+        RunContext runContext = TestsUtils.mockRunContext(runContextFactory, task, Map.of());
+
+        SDK sdk = () -> Optional.of(new SDK.Auth(Optional.empty(), Optional.of(apiToken), Optional.of(username), Optional.of(password)));
+        Field sdkField = runContext.getClass().getDeclaredField("sdk");
+        sdkField.setAccessible(true);
+        sdkField.set(runContext, sdk);
+
+        return runContext;
     }
 
     private static TestCloningTask.TestCloningTaskBuilder<?, ?> cloningTask() {
@@ -142,6 +168,19 @@ class KestraApiConnectionTest {
             e.getMessage(),
             is("No authentication method provided. Set 'auth.apiToken', or 'auth.username' and 'auth.password', or configure a default one with the 'kestra.tasks.sdk.authentication' properties.")
         );
+    }
+
+    /**
+     * When the default SDK authentication resolves both a username/password pair and an API token (e.g. an
+     * instance-wide config where both happen to be set), Basic auth must win, matching the long-standing
+     * OSS {@code AbstractCloningTask.kestraClient()} behavior this default branch was extracted from.
+     */
+    @Test
+    void shouldPreferBasicAuthOverApiTokenInTheDefaultSdkAuthentication() throws Exception {
+        var task = cloningTask().build();
+        var runContext = runContextWithSdkBasicAndTokenAuth(task, "default-user", "default-pass", "default-token");
+
+        assertThat(authorizationHeader(task.kestraClient(runContext)), startsWith("Basic "));
     }
 
     /** The SDK builder defaults to Basic auth, so building a client without credentials would send `Basic base64("null:null")`. */
