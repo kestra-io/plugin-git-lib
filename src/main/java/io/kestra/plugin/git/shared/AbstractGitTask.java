@@ -80,7 +80,6 @@ public abstract class AbstractGitTask extends Task {
         description = "Used for HTTP basic authentication and as a fallback commit author."
     )
     @PluginProperty(secret = true, group = "connection")
-    @ToString.Exclude
     protected Property<String> username;
 
     @Schema(
@@ -94,7 +93,6 @@ public abstract class AbstractGitTask extends Task {
             """
     )
     @PluginProperty(secret = true, group = "connection")
-    @ToString.Exclude
     protected Property<String> password;
 
     @Schema(
@@ -102,19 +100,18 @@ public abstract class AbstractGitTask extends Task {
         description = "PEM-formatted private key matching a public key registered on the Git server. Generate with `ssh-keygen -t ecdsa -b 256 -m PEM`."
     )
     @PluginProperty(secret = true, group = "connection")
-    @ToString.Exclude
     protected Property<String> privateKey;
 
     @Schema(title = "Passphrase for `privateKey`")
     @PluginProperty(secret = true, group = "advanced")
-    @ToString.Exclude
     protected Property<String> passphrase;
 
     @Schema(
         title = "Whether to verify the SSH remote server's host key",
         description = "When enabled, the host key presented by the Git server is verified against `knownHosts` " +
             "(if provided) or the system/user known_hosts file. Disabling it exposes the connection to " +
-            "man-in-the-middle attacks (CWE-297). Set `knownHosts` alongside this property for a hardened setup."
+            "man-in-the-middle attacks (CWE-297). Set `knownHosts` alongside this property for a hardened setup. " +
+            "The default differs by edition: disabled (`false`) on Kestra OSS, enabled (`true`) on Kestra Enterprise Edition."
     )
     @PluginProperty(group = "advanced")
     protected Property<Boolean> strictHostKeyChecking;
