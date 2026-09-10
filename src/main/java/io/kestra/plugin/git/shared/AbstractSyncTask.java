@@ -90,18 +90,36 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
 
     private static final List<String> PATH_TO_IGNORE = List.of(".git", ".gitignore", ".gitkeep");
 
+    /**
+     * Whether symlinks are followed while walking the git directory.
+     *
+     * <p>Defaults to {@code true} (OSS, unchanged). The Enterprise Edition has never followed symlinks: a symlink
+     * pointing outside the cloned git directory must not be read from, or written into, the namespace.
+     */
+    protected boolean followSymlinks() {
+        return true;
+    }
+
+    /**
+     * Whether a git-internal path is excluded from sync.
+     *
+     * <p>Defaults to excluding paths ending with {@code .git}/{@code .gitignore}/{@code .gitkeep} (OSS, unchanged).
+     * The Enterprise Edition has always excluded any path merely containing {@code .git} — notably also
+     * {@code .github/} and the contents of {@code .git} itself at the repository root.
+     */
+    protected boolean isGitInternalPath(Path path) {
+        return PATH_TO_IGNORE.stream().anyMatch(suffix -> path.toString().endsWith(suffix));
+    }
+
     protected Map<URI, Supplier<InputStream>> gitResourcesContentByUri(Path baseDirectory, RunContext runContext) throws IOException, IllegalVariableEvaluationException {
-        try (
-            Stream<Path> paths = Files.walk(
-                baseDirectory,
-                runContext.render(this.traverseDirectories()).as(Boolean.class).orElseThrow() ? MAX_VALUE : 1,
-                FileVisitOption.FOLLOW_LINKS
-            )
-        ) {
+        int maxDepth = runContext.render(this.traverseDirectories()).as(Boolean.class).orElseThrow() ? MAX_VALUE : 1;
+        FileVisitOption[] visitOptions = this.followSymlinks() ? new FileVisitOption[]{FileVisitOption.FOLLOW_LINKS} : new FileVisitOption[0];
+
+        try (Stream<Path> paths = Files.walk(baseDirectory, maxDepth, visitOptions)) {
             Stream<Path> filtered = paths.skip(1);
             KestraIgnore kestraIgnore = new KestraIgnore(baseDirectory);
             filtered = filtered.filter(path -> !kestraIgnore.isIgnoredFile(path.toString(), true));
-            filtered = filtered.filter(path -> PATH_TO_IGNORE.stream().noneMatch(ext -> path.toString().endsWith(ext)));
+            filtered = filtered.filter(path -> !this.isGitInternalPath(path));
 
             return filtered.collect(
                 Collectors.toMap(
