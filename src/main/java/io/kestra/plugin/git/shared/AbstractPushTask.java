@@ -101,7 +101,7 @@ public abstract class AbstractPushTask<O extends AbstractPushTask.Output> extend
     private Property<Boolean> delete = Property.ofValue(true);
 
     @Schema(
-        title = "What the task pushes.",
+        title = "Push mode",
         description = """
             `SYNC` (default) writes every matched resource to the work tree and stages it, in addition to staging \
             removals when `delete` is true — this is the standard push behavior, unchanged.
