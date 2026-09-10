@@ -210,16 +210,22 @@ public abstract class AbstractGitTask extends Task {
     }
 
     /**
-     * Configure a secure SSLContext based on either:
-     * - the JVM default truststore ("JVM" key), or
-     * - a composite trust manager (PEM trust + JVM trust) when a PEM path is provided ("PEM:{@literal <sha256>}").
-     * This method is idempotent and will reconfigure the global SSLContext if and only if the desired key changes.
+     * Installs a composite trust manager (PEM trust + JVM trust) as the JVM-global default SSLContext when
+     * {@code trustedCaPemPath} is set. This method is a no-op when no custom CA is configured: the shared kernel
+     * is compiled separately into the OSS and Enterprise Edition jars, each with its own {@link #SSL_CONFIGURED_KEY}
+     * cache, but both mutate the same JVM-global default SSLContext ({@link SSLContext#setDefault}). Resetting it
+     * to the JVM default here would let a task in one edition silently undo a custom CA installed by a task in the
+     * other edition. Idempotent for the custom-CA case: reconfigures if and only if the PEM content changes.
      */
     protected void configureEnvironmentWithSsl(RunContext runContext) throws Exception {
-        // Render potential PEM path
-        String pemPath = trustedCaPemPath == null ? null : runContext.render(trustedCaPemPath).as(String.class).orElse(null);
+        if (trustedCaPemPath == null) {
+            return;
+        }
+        String pemPath = runContext.render(trustedCaPemPath).as(String.class).orElse(null);
+        if (pemPath == null || pemPath.isBlank()) {
+            return;
+        }
 
-        // Compute desired configuration key for this run
         String desiredKey = computeDesiredSslKey(pemPath);
 
         // Fast-path: already configured with this key
@@ -235,19 +241,12 @@ public abstract class AbstractGitTask extends Task {
 
             SSLContext sslContext = SSLContext.getInstance("TLS");
 
-            if (pemPath != null && !pemPath.isBlank()) {
-                // Build composite TrustManager: [custom-from-PEM, jvm-default]
-                X509TrustManager customTm = buildTrustManagerFromPem(Path.of(pemPath));
-                X509TrustManager jvmTm = buildJvmDefaultTrustManager();
-                X509TrustManager composite = new CompositeX509TrustManager(List.of(customTm, jvmTm));
-                sslContext.init(null, new TrustManager[] { composite }, new SecureRandom());
-                runContext.logger().info("Configured SSLContext with PEM: {}", pemPath);
-            } else {
-                // JVM default only
-                X509TrustManager jvmTm = buildJvmDefaultTrustManager();
-                sslContext.init(null, new TrustManager[] { jvmTm }, new SecureRandom());
-                runContext.logger().info("Configured SSLContext with JVM default truststore");
-            }
+            // Build composite TrustManager: [custom-from-PEM, jvm-default]
+            X509TrustManager customTm = buildTrustManagerFromPem(Path.of(pemPath));
+            X509TrustManager jvmTm = buildJvmDefaultTrustManager();
+            X509TrustManager composite = new CompositeX509TrustManager(List.of(customTm, jvmTm));
+            sslContext.init(null, new TrustManager[] { composite }, new SecureRandom());
+            runContext.logger().info("Configured SSLContext with PEM: {}", pemPath);
 
             // Apply as global defaults for JGit/HttpClient
             SSLContext.setDefault(sslContext);
@@ -259,12 +258,8 @@ public abstract class AbstractGitTask extends Task {
         }
     }
 
-    // Builds a key representing the desired SSL configuration.
-    // "JVM" when no PEM is used, or "PEM:<sha256-of-bytes>" when a PEM file is provided.
+    // Builds a key representing the desired SSL configuration: "PEM:<sha256-of-bytes>" of the trusted CA file.
     private static String computeDesiredSslKey(String pemPath) throws Exception {
-        if (pemPath == null || pemPath.isBlank()) {
-            return "JVM";
-        }
         byte[] bytes = Files.readAllBytes(Path.of(pemPath));
         byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
         return "PEM:" + Base64.getEncoder().encodeToString(digest);
