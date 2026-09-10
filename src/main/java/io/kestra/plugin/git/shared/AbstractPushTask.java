@@ -380,91 +380,88 @@ public abstract class AbstractPushTask<O extends AbstractPushTask.Output> extend
 
         gitService.namespaceAccessGuard(runContext, this.fetchedNamespace());
 
-        Git git = gitService.cloneBranch(runContext, runContext.render(this.getBranch()).as(String.class).orElse(null), this.cloneSubmodules);
+        try (Git git = gitService.cloneBranch(runContext, runContext.render(this.getBranch()).as(String.class).orElse(null), this.cloneSubmodules)) {
+            Path localGitDirectory = this.createGitDirectory(runContext);
 
-        Path localGitDirectory = this.createGitDirectory(runContext);
-
-        // The concrete glob-holding field can be a raw List/String (legacy dynamic properties) or a Property<String>
-        // (e.g. plugin-ee-git's PushBlueprints); every shape must be handled here since globs() only exposes Object.
-        List<String> globs = switch (this.globs()) {
-            case List<?> globList -> ((List<String>) globList).stream().map(throwFunction(runContext::render)).toList();
-            case String globString -> {
-                String renderedValue = runContext.render(globString);
-                try {
-                    yield MAPPER.readValue(renderedValue, TYPE_REFERENCE);
-                } catch (JsonProcessingException e) {
-                    yield Collections.singletonList(renderedValue);
+            // The concrete glob-holding field can be a raw List/String (legacy dynamic properties) or a Property<String>
+            // (e.g. plugin-ee-git's PushBlueprints); every shape must be handled here since globs() only exposes Object.
+            List<String> globs = switch (this.globs()) {
+                case List<?> globList -> ((List<String>) globList).stream().map(throwFunction(runContext::render)).toList();
+                case String globString -> {
+                    String renderedValue = runContext.render(globString);
+                    try {
+                        yield MAPPER.readValue(renderedValue, TYPE_REFERENCE);
+                    } catch (JsonProcessingException e) {
+                        yield Collections.singletonList(renderedValue);
+                    }
                 }
-            }
-            case Property<?> globProperty -> {
-                var rendered = runContext.render((Property<String>) globProperty).as(String.class).orElse(null);
-                if (rendered == null) {
-                    yield null;
+                case Property<?> globProperty -> {
+                    var rendered = runContext.render((Property<String>) globProperty).as(String.class).orElse(null);
+                    if (rendered == null) {
+                        yield null;
+                    }
+                    try {
+                        yield MAPPER.readValue(rendered, TYPE_REFERENCE);
+                    } catch (JsonProcessingException e) {
+                        yield Collections.singletonList(rendered);
+                    }
                 }
-                try {
-                    yield MAPPER.readValue(rendered, TYPE_REFERENCE);
-                } catch (JsonProcessingException e) {
-                    yield Collections.singletonList(rendered);
+                case null, default -> null;
+            };
+
+            Map<Path, Supplier<InputStream>> contentByPath = this.instanceResourcesContentByPath(runContext, localGitDirectory, globs);
+
+            this.writeResourceFiles(contentByPath);
+
+            KestraIgnore kestraIgnore = new KestraIgnore(localGitDirectory);
+
+            Map<Path, Supplier<InputStream>> filteredContentByPath = new LinkedHashMap<>();
+            for (Map.Entry<Path, Supplier<InputStream>> e : contentByPath.entrySet()) {
+                Path p = e.getKey().normalize();
+                String filename = p.getFileName() != null ? p.getFileName().toString() : "";
+
+                if (".kestraignore".equals(filename)) {
+                    filteredContentByPath.put(e.getKey(), e.getValue());
+                    continue;
                 }
-            }
-            case null, default -> null;
-        };
 
-        Map<Path, Supplier<InputStream>> contentByPath = this.instanceResourcesContentByPath(runContext, localGitDirectory, globs);
+                String rel = localGitDirectory.relativize(p).toString().replace('\\', '/');
+                if (!kestraIgnore.isIgnoredFile(rel, false)) {
+                    filteredContentByPath.put(e.getKey(), e.getValue());
+                } else {
+                    runContext.logger().debug("Skipped ignored file: {}", rel);
+                }
 
-        this.writeResourceFiles(contentByPath);
-
-        KestraIgnore kestraIgnore = new KestraIgnore(localGitDirectory);
-
-        Map<Path, Supplier<InputStream>> filteredContentByPath = new LinkedHashMap<>();
-        for (Map.Entry<Path, Supplier<InputStream>> e : contentByPath.entrySet()) {
-            Path p = e.getKey().normalize();
-            String filename = p.getFileName() != null ? p.getFileName().toString() : "";
-
-            if (".kestraignore".equals(filename)) {
-                filteredContentByPath.put(e.getKey(), e.getValue());
-                continue;
             }
 
-            String rel = localGitDirectory.relativize(p).toString().replace('\\', '/');
-            if (!kestraIgnore.isIgnoredFile(rel, false)) {
-                filteredContentByPath.put(e.getKey(), e.getValue());
-            } else {
-                runContext.logger().debug("Skipped ignored file: {}", rel);
+            contentByPath = filteredContentByPath;
+
+            boolean rDelete = runContext.render(this.delete).as(Boolean.class).orElse(true);
+            if (rDelete) {
+                this.deleteOutdatedResources(git, localGitDirectory, contentByPath, globs, kestraIgnore);
             }
 
+            var workTree = git.getRepository().getWorkTree().toPath().toRealPath();
+
+            if (contentByPath.isEmpty()) {
+                runContext.logger().info("No content to push - skipping Git operations.");
+                return output(Output.builder().build(), null);
+            }
+
+            AddCommand add = git.add();
+
+            for (Path p : contentByPath.keySet()) {
+                String gitRel = workTree.relativize(p.toRealPath()).toString().replace('\\', '/');
+                add.addFilepattern(gitRel);
+            }
+            add.call();
+
+            Output pushOutput = this.push(git, runContext, gitService);
+
+            URI diffFileStorageUri = this.createDiffFile(runContext, git);
+
+            return output(pushOutput, diffFileStorageUri);
         }
-
-        contentByPath = filteredContentByPath;
-
-        boolean rDelete = runContext.render(this.delete).as(Boolean.class).orElse(true);
-        if (rDelete) {
-            this.deleteOutdatedResources(git, localGitDirectory, contentByPath, globs, kestraIgnore);
-        }
-
-        var workTree = git.getRepository().getWorkTree().toPath().toRealPath();
-
-        if (contentByPath.isEmpty()) {
-            runContext.logger().info("No content to push - skipping Git operations.");
-            git.close();
-            return output(Output.builder().build(), null);
-        }
-
-        AddCommand add = git.add();
-
-        for (Path p : contentByPath.keySet()) {
-            String gitRel = workTree.relativize(p.toRealPath()).toString().replace('\\', '/');
-            add.addFilepattern(gitRel);
-        }
-        add.call();
-
-        Output pushOutput = this.push(git, runContext, gitService);
-
-        URI diffFileStorageUri = this.createDiffFile(runContext, git);
-
-        git.close();
-
-        return output(pushOutput, diffFileStorageUri);
     }
 
     protected abstract O output(Output pushOutput, URI diffFileStorageUri);

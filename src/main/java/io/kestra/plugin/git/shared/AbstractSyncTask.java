@@ -14,7 +14,6 @@ import java.util.stream.Stream;
 
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
-import org.eclipse.jgit.api.Git;
 
 import io.kestra.core.exceptions.FlowProcessingException;
 import io.kestra.core.exceptions.IllegalVariableEvaluationException;
@@ -207,73 +206,71 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
 
         gitService.namespaceAccessGuard(runContext, this.fetchedNamespace());
 
-        Git git = gitService.cloneBranch(runContext, runContext.render(this.getBranch()).as(String.class).orElse(null), this.cloneSubmodules);
+        try (var git = gitService.cloneBranch(runContext, runContext.render(this.getBranch()).as(String.class).orElse(null), this.cloneSubmodules)) {
+            Path localGitDirectory = this.createGitDirectory(runContext);
+            Map<URI, Supplier<InputStream>> gitContentByUri = this.gitResourcesContentByUri(localGitDirectory, runContext);
 
-        Path localGitDirectory = this.createGitDirectory(runContext);
-        Map<URI, Supplier<InputStream>> gitContentByUri = this.gitResourcesContentByUri(localGitDirectory, runContext);
+            String renderedNamespace = runContext.render(this.fetchedNamespace()).as(String.class).orElse(null);
 
-        String renderedNamespace = runContext.render(this.fetchedNamespace()).as(String.class).orElse(null);
-
-        Map<URI, T> beforeUpdateResourcesByUri = this.fetchResources(runContext, renderedNamespace)
-            .stream()
-            .collect(
-                Collectors.toMap(
-                    resource -> this.toUri(renderedNamespace, resource),
-                    Function.identity()
-                )
-            );
-        Map<URI, URI> gitUriByResourceUri = new HashMap<>();
-        Map<URI, T> updatedResourcesByUri = gitContentByUri.entrySet().stream()
-            .sorted(Comparator.comparing(e -> StringUtils.countMatches(e.getKey().getPath(), "/")))
-            .map(throwFunction(e ->
-            {
-                InputStream inputStream = e.getValue().get();
-                T resource;
-                if (runContext.render(this.dryRun).as(Boolean.class).orElseThrow()) {
-                    resource = this.simulateResourceWrite(runContext, renderedNamespace, e.getKey(), inputStream);
-                } else {
-                    resource = this.writeResource(runContext, renderedNamespace, e.getKey(), inputStream);
-                }
-
-                return Pair.of(e.getKey(), resource);
-            }))
-            .collect(
-                HashMap::new,
-                (map, pair) ->
+            Map<URI, T> beforeUpdateResourcesByUri = this.fetchResources(runContext, renderedNamespace)
+                .stream()
+                .collect(
+                    Collectors.toMap(
+                        resource -> this.toUri(renderedNamespace, resource),
+                        Function.identity()
+                    )
+                );
+            Map<URI, URI> gitUriByResourceUri = new HashMap<>();
+            Map<URI, T> updatedResourcesByUri = gitContentByUri.entrySet().stream()
+                .sorted(Comparator.comparing(e -> StringUtils.countMatches(e.getKey().getPath(), "/")))
+                .map(throwFunction(e ->
                 {
-                    URI uri = pair.getLeft();
-                    T resource = pair.getRight();
-                    URI resourceUri = this.toUri(renderedNamespace, resource);
-                    map.put(resourceUri, resource);
-                    gitUriByResourceUri.put(resourceUri, uri);
-                },
-                HashMap::putAll
-            );
+                    InputStream inputStream = e.getValue().get();
+                    T resource;
+                    if (runContext.render(this.dryRun).as(Boolean.class).orElseThrow()) {
+                        resource = this.simulateResourceWrite(runContext, renderedNamespace, e.getKey(), inputStream);
+                    } else {
+                        resource = this.writeResource(runContext, renderedNamespace, e.getKey(), inputStream);
+                    }
 
-        List<T> deleted;
-        if (runContext.render(this.getDelete()).as(Boolean.class).orElseThrow()) {
-            deleted = new ArrayList<>();
-            beforeUpdateResourcesByUri.entrySet().stream().filter(e -> !updatedResourcesByUri.containsKey(e.getKey())).forEach(throwConsumer(e ->
-            {
-                if (this.mustKeep(runContext, e.getValue())) {
-                    return;
-                }
+                    return Pair.of(e.getKey(), resource);
+                }))
+                .collect(
+                    HashMap::new,
+                    (map, pair) ->
+                    {
+                        URI uri = pair.getLeft();
+                        T resource = pair.getRight();
+                        URI resourceUri = this.toUri(renderedNamespace, resource);
+                        map.put(resourceUri, resource);
+                        gitUriByResourceUri.put(resourceUri, uri);
+                    },
+                    HashMap::putAll
+                );
 
-                if (!runContext.render(this.dryRun).as(Boolean.class).orElseThrow()) {
-                    this.deleteResource(runContext, renderedNamespace, e.getValue());
-                }
+            List<T> deleted;
+            if (runContext.render(this.getDelete()).as(Boolean.class).orElseThrow()) {
+                deleted = new ArrayList<>();
+                beforeUpdateResourcesByUri.entrySet().stream().filter(e -> !updatedResourcesByUri.containsKey(e.getKey())).forEach(throwConsumer(e ->
+                {
+                    if (this.mustKeep(runContext, e.getValue())) {
+                        return;
+                    }
 
-                deleted.add(e.getValue());
-            }));
-        } else {
-            deleted = null;
+                    if (!runContext.render(this.dryRun).as(Boolean.class).orElseThrow()) {
+                        this.deleteResource(runContext, renderedNamespace, e.getValue());
+                    }
+
+                    deleted.add(e.getValue());
+                }));
+            } else {
+                deleted = null;
+            }
+
+            URI diffFileStorageUri = this.createDiffFile(runContext, renderedNamespace, gitUriByResourceUri, beforeUpdateResourcesByUri, updatedResourcesByUri, deleted);
+
+            return output(diffFileStorageUri);
         }
-
-        URI diffFileStorageUri = this.createDiffFile(runContext, renderedNamespace, gitUriByResourceUri, beforeUpdateResourcesByUri, updatedResourcesByUri, deleted);
-
-        git.close();
-
-        return output(diffFileStorageUri);
     }
 
     protected abstract List<T> fetchResources(RunContext runContext, String renderedNamespace) throws IOException, IllegalVariableEvaluationException;
