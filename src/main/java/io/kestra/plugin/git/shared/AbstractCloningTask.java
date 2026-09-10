@@ -125,7 +125,8 @@ public abstract class AbstractCloningTask extends AbstractGitTask {
                 - Set `kestra.tasks.sdk.authentication.url` for the API URL
                 - Set `kestra.tasks.sdk.authentication.api-token` for API token auth
                 - Set `kestra.tasks.sdk.authentication.username` and `kestra.tasks.sdk.authentication.password` for HTTP Basic auth
-                The Enterprise Edition also allows an administrator to set these defaults at the namespace or the tenant level."""
+                The Enterprise Edition also allows an administrator to set these defaults at the namespace or the tenant level.
+                Set this to `false` without any credentials to call a Kestra API that requires no authentication."""
         )
         @Builder.Default
         @PluginProperty(group = "advanced")

@@ -22,7 +22,8 @@ final class KestraApiConnection {
     private static final String DEFAULT_URL = "http://localhost:8080";
     private static final String URL_TEMPLATE = "{{ kestra.url }}";
     private static final String NO_AUTH_MESSAGE = "No authentication method provided. Set 'auth.apiToken', or " +
-        "'auth.username' and 'auth.password', or configure a default one with the 'kestra.tasks.sdk.authentication' properties.";
+        "'auth.username' and 'auth.password', or configure a default one with the 'kestra.tasks.sdk.authentication' properties. " +
+        "Set 'auth.auto' to false to call a Kestra API that requires no authentication.";
 
     private final String url;
     private final DefaultAuthSupplier defaultAuth;
@@ -40,6 +41,11 @@ final class KestraApiConnection {
     /** The default SDK authentication, empty when the task opted out of it with {@code auth.auto}. */
     Optional<SDK.Auth> defaultAuth() {
         return defaultAuth.get();
+    }
+
+    /** Whether {@code auth.auto} is on, i.e. the task did not explicitly ask to call an unauthenticated API. */
+    boolean auto() {
+        return defaultAuth.enabled;
     }
 
     /**
@@ -61,6 +67,9 @@ final class KestraApiConnection {
      * behavior of returning an unauthenticated client, since some deployments legitimately point these tasks at a
      * Kestra API that does not require authentication and existing flows rely on that. Tracked for a follow-up
      * decision on whether to align it with the strict behavior.
+     *
+     * <p>Setting {@code auth.auto} to {@code false} without any credential is how a task opts into calling an
+     * unsecured Kestra API on purpose, and it defeats {@code requireAuthentication} for either family.
      */
     static KestraClient buildClient(RunContext runContext, @Nullable Property<String> kestraUrl, @Nullable KestraApiAuth auth, boolean requireAuthentication, KestraTaskFamily family) throws IllegalVariableEvaluationException {
         KestraApiConnection connection = resolve(runContext, kestraUrl, auth);
@@ -113,11 +122,11 @@ final class KestraApiConnection {
             }
         }
 
-        if (requireAuthentication) {
+        if (requireAuthentication && connection.auto()) {
             throw new IllegalArgumentException(NO_AUTH_MESSAGE);
         }
 
-        return builder.build();
+        return builder.noAuth().build();
     }
 
     /**
