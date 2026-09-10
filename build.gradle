@@ -50,12 +50,13 @@ dependencies {
     compileOnly group: "io.kestra", name: "script", version: kestraVersion
 
     // git — exposed as api so consumers (plugin-git, plugin-ee-git) inherit them transitively
-    api 'org.eclipse.jgit:org.eclipse.jgit:7.6.0.202603022253-r'
-    api 'org.eclipse.jgit:org.eclipse.jgit.ssh.jsch:7.6.0.202603022253-r'
-    api "org.eclipse.jgit:org.eclipse.jgit.http.apache:7.6.0.202603022253-r"
+    // kept in lockstep with plugin-ee-git's jgit version to avoid silently downgrading it
+    api 'org.eclipse.jgit:org.eclipse.jgit:7.7.1.202607240634-r'
+    api 'org.eclipse.jgit:org.eclipse.jgit.ssh.jsch:7.7.1.202607240634-r'
+    api "org.eclipse.jgit:org.eclipse.jgit.http.apache:7.7.1.202607240634-r"
 
     // kestra API client — exposed as api since consumers build KestraClient instances from the lib's classes
-    api "io.kestra:kestra-api-client:2.0.0"
+    api "io.kestra:kestra-api-client:$kestraVersion"
 }
 
 
@@ -136,6 +137,25 @@ jacocoTestReport {
 /**********************************************************************************************************************\
  * Publish
  **********************************************************************************************************************/
+// Gradle publishes the testFixtures feature variant as extra "optional" runtime dependencies
+// (micronaut-test-junit5, testcontainers, junit-jupiter-api) in the flattened Maven POM, since the legacy POM format
+// has no concept of feature variants. Gradle consumers (e.g. plugin-ee-git's `testFixtures(...)`) never read these:
+// they resolve the test-fixtures artifact and its dependencies through the published Gradle module metadata, which
+// this does not touch. Stripping them from the POM only keeps non-Gradle/POM-scanning consumers from seeing
+// test-only dependencies listed against the main artifact.
+def testOnlyPomArtifacts = ['micronaut-test-junit5', 'testcontainers', 'junit-jupiter', 'junit-jupiter-api']
+publishing {
+    publications.withType(MavenPublication).configureEach {
+        pom.withXml {
+            def dependencies = asNode().dependencies
+            if (dependencies) {
+                dependencies.dependency.findAll { testOnlyPomArtifacts.contains(it.artifactId.text()) }
+                    .each { dependencies[0].remove(it) }
+            }
+        }
+    }
+}
+
 mavenPublishing {
     publishToMavenCentral(true)
     signAllPublications()
