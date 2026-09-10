@@ -60,6 +60,17 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
     @PluginProperty(group = "advanced")
     private Property<Boolean> failOnMissingDirectory = Property.ofValue(true);
 
+    @Schema(
+        title = "Fail if branch missing",
+        description = "Default true. If false, falls back to creating the requested branch from the repository's " +
+            "default branch when the rendered `branch` does not exist on the remote. This means the sync then reads " +
+            "content from the default branch instead of the requested one, and with `delete` set to true it can " +
+            "delete namespace content that only exists on the requested branch."
+    )
+    @Builder.Default
+    @PluginProperty(group = "advanced")
+    private Property<Boolean> failOnMissingBranch = Property.ofValue(true);
+
     public abstract Property<Boolean> getDelete();
 
     public abstract Property<String> getGitDirectory();
@@ -86,6 +97,27 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
         }
 
         return syncDirectory;
+    }
+
+    private void checkBranchExists(RunContext runContext, GitService gitService, String renderedBranch) throws Exception {
+        if (renderedBranch == null || renderedBranch.isBlank()) {
+            return;
+        }
+
+        if (!gitService.branchExists(runContext, renderedBranch) && runContext.render(this.failOnMissingBranch).as(Boolean.class).orElse(true)) {
+            throw new IllegalArgumentException(
+                String.format(
+                    "Branch '%s' does not exist on repository '%s'. Sync tasks never create a missing branch: " +
+                        "doing so would silently sync from the repository's default branch instead, which can delete " +
+                        "namespace content that only exists on '%s' when `delete` is true. Create the branch on the " +
+                        "remote first, fix the `branch` property, or set `failOnMissingBranch` to false to accept " +
+                        "this fallback behavior.",
+                    renderedBranch,
+                    runContext.render(this.getUrl()).as(String.class).orElse(null),
+                    renderedBranch
+                )
+            );
+        }
     }
 
     private static final List<String> PATH_TO_IGNORE = List.of(".git", ".gitignore", ".gitkeep");
@@ -224,7 +256,10 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
 
         gitService.namespaceAccessGuard(runContext, this.fetchedNamespace());
 
-        try (var git = gitService.cloneBranch(runContext, runContext.render(this.getBranch()).as(String.class).orElse(null), this.cloneSubmodules)) {
+        String renderedBranch = runContext.render(this.getBranch()).as(String.class).orElse(null);
+        this.checkBranchExists(runContext, gitService, renderedBranch);
+
+        try (var git = gitService.cloneBranch(runContext, renderedBranch, this.cloneSubmodules)) {
             Path localGitDirectory = this.createGitDirectory(runContext);
             Map<URI, Supplier<InputStream>> gitContentByUri = this.gitResourcesContentByUri(localGitDirectory, runContext);
 
