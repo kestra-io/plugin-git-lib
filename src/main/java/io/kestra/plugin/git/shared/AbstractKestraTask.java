@@ -35,7 +35,7 @@ public abstract class AbstractKestraTask extends AbstractGitTask {
     private Auth auth;
 
     protected KestraClient kestraClient(RunContext runContext) throws IllegalVariableEvaluationException {
-        return KestraApiConnection.buildClient(runContext, kestraUrl, auth, true);
+        return KestraApiConnection.buildClient(runContext, kestraUrl, auth, true, KestraTaskFamily.KESTRA_API);
     }
 
     @Builder

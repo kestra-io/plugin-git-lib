@@ -183,6 +183,65 @@ class KestraApiConnectionTest {
         assertThat(authorizationHeader(task.kestraClient(runContext)), startsWith("Basic "));
     }
 
+    /**
+     * Unlike {@code AbstractCloningTask} above, {@code AbstractKestraTask}'s default SDK auth resolution must
+     * prefer the API token over Basic credentials — the precedence its own {@code applyDefaultCredentials()} used
+     * before the shared-kernel extraction. A round-1 fix of the cloning family's precedence bug moved the same
+     * basic-first order onto this family; this test pins the restored, family-specific order down.
+     */
+    @Test
+    void shouldPreferApiTokenOverBasicAuthInTheDefaultSdkAuthenticationForKestraApiTasks() throws Exception {
+        var task = TestKestraTask.builder()
+            .id("kestraTask")
+            .type(TestKestraTask.class.getName())
+            .auth(AbstractKestraTask.Auth.builder().build())
+            .build();
+        var runContext = runContextWithSdkBasicAndTokenAuth(task, "default-user", "default-pass", "default-token");
+
+        assertThat(authorizationHeader(task.kestraClient(runContext)), is("Bearer default-token"));
+    }
+
+    /**
+     * {@code AbstractKestraTask} historically rejected a declared-but-null {@code apiToken} Property alongside
+     * username/password (field-nullness check on the Property object itself, before rendering), instead of falling
+     * through to Basic like the rendered-value check the shared {@code buildClient} otherwise uses. This pins that
+     * stricter, family-specific behavior down.
+     */
+    @Test
+    void shouldRejectANullValuedApiTokenAlongsideBasicCredentialsForKestraApiTasks() {
+        var task = TestKestraTask.builder()
+            .id("kestraTask")
+            .type(TestKestraTask.class.getName())
+            .auth(AbstractKestraTask.Auth.builder()
+                .apiToken(Property.ofValue(null))
+                .username(Property.ofValue("user"))
+                .password(Property.ofValue("pass"))
+                .build())
+            .build();
+
+        var e = assertThrows(IllegalArgumentException.class, () -> task.kestraClient(runContextFactory.of()));
+
+        assertThat(e.getMessage(), is("Cannot use both API Token authentication and HTTP Basic authentication"));
+    }
+
+    /**
+     * {@code AbstractCloningTask} never had the field-nullness rule above: its mutual-exclusion check is
+     * rendered-value based, so a declared-but-null-valued {@code apiToken} Property alongside username/password
+     * renders to an absent value and falls through to Basic instead of erroring.
+     */
+    @Test
+    void cloningTask_fallsThroughToBasicAuthWithANullValuedApiTokenAlongsideBasicCredentials() throws Exception {
+        var task = cloningTask()
+            .auth(AbstractCloningTask.Auth.builder()
+                .apiToken(Property.ofValue(null))
+                .username(Property.ofValue("user"))
+                .password(Property.ofValue("pass"))
+                .build())
+            .build();
+
+        assertThat(authorizationHeader(task.kestraClient(runContextFactory.of())), startsWith("Basic "));
+    }
+
     /** The SDK builder defaults to Basic auth, so building a client without credentials would send `Basic base64("null:null")`. */
     @Test
     void shouldFailWhenAutoIsDisabledWithoutCredentials() throws Exception {

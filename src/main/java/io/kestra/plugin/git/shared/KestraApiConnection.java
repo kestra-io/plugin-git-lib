@@ -46,9 +46,13 @@ final class KestraApiConnection {
      * Builds a {@link KestraClient} for the given task {@code kestraUrl}/{@code auth} properties.
      *
      * <p>Shared by every {@code kestraClient()} implementation in this hierarchy ({@code AbstractCloningTask},
-     * {@code AbstractKestraTask}) so the authentication precedence and error messages can never drift between
-     * them: explicit {@code auth.apiToken} or {@code auth.username}/{@code auth.password}, then the default SDK
-     * authentication (unless {@code auth.auto} opts out).
+     * {@code AbstractKestraTask}) so the bulk of the authentication resolution and the error messages can never
+     * drift between them: explicit {@code auth.apiToken} or {@code auth.username}/{@code auth.password}, then the
+     * default SDK authentication (unless {@code auth.auto} opts out).
+     *
+     * <p>{@code family} carries the two ways the two hierarchies have always differed and must keep differing
+     * (see {@link KestraTaskFamily}): which credential wins in the default SDK authentication when it carries both
+     * a token and Basic credentials, and how strictly the explicit mutual-exclusion is enforced.
      *
      * <p>{@code requireAuthentication} controls what happens when none of the above resolves:
      * {@code AbstractKestraTask} (whose {@code auth} property is mandatory) throws an actionable
@@ -58,17 +62,24 @@ final class KestraApiConnection {
      * Kestra API that does not require authentication and existing flows rely on that. Tracked for a follow-up
      * decision on whether to align it with the strict behavior.
      */
-    static KestraClient buildClient(RunContext runContext, @Nullable Property<String> kestraUrl, @Nullable KestraApiAuth auth, boolean requireAuthentication) throws IllegalVariableEvaluationException {
+    static KestraClient buildClient(RunContext runContext, @Nullable Property<String> kestraUrl, @Nullable KestraApiAuth auth, boolean requireAuthentication, KestraTaskFamily family) throws IllegalVariableEvaluationException {
         KestraApiConnection connection = resolve(runContext, kestraUrl, auth);
         runContext.logger().debug("Kestra URL: {}", connection.url());
 
         var builder = KestraClient.builder().url(connection.url());
 
+        // AbstractKestraTask historically rejected a declared-but-blank apiToken next to username/password instead
+        // of silently falling through to Basic; AbstractCloningTask never had that rule, so it stays rendered-value based below.
+        if (family == KestraTaskFamily.KESTRA_API && auth != null
+            && auth.getApiToken() != null && (auth.getUsername() != null || auth.getPassword() != null)) {
+            throw new IllegalArgumentException("Cannot use both API Token authentication and HTTP Basic authentication");
+        }
+
         Optional<String> maybeApiToken = auth == null ? Optional.empty() : runContext.render(auth.getApiToken()).as(String.class);
         Optional<String> maybeUsername = auth == null ? Optional.empty() : runContext.render(auth.getUsername()).as(String.class);
         Optional<String> maybePassword = auth == null ? Optional.empty() : runContext.render(auth.getPassword()).as(String.class);
 
-        if (maybeApiToken.isPresent() && (maybeUsername.isPresent() || maybePassword.isPresent())) {
+        if (family == KestraTaskFamily.CLONING && maybeApiToken.isPresent() && (maybeUsername.isPresent() || maybePassword.isPresent())) {
             throw new IllegalArgumentException("Cannot use both API Token authentication and HTTP Basic authentication");
         }
         if (maybeApiToken.isPresent()) {
@@ -83,11 +94,22 @@ final class KestraApiConnection {
 
         Optional<SDK.Auth> autoAuth = connection.defaultAuth();
         if (autoAuth.isPresent()) {
-            if (autoAuth.get().username().isPresent() && autoAuth.get().password().isPresent()) {
-                return builder.basicAuth(autoAuth.get().username().get(), autoAuth.get().password().get()).build();
-            }
-            if (autoAuth.get().apiToken().isPresent()) {
-                return builder.tokenAuth(autoAuth.get().apiToken().get()).build();
+            // The order below is the only difference between the two families' default-auth resolution: restoring
+            // the pre-extraction precedence for each is the entire point of this branch (see KestraTaskFamily).
+            if (family == KestraTaskFamily.KESTRA_API) {
+                if (autoAuth.get().apiToken().isPresent()) {
+                    return builder.tokenAuth(autoAuth.get().apiToken().get()).build();
+                }
+                if (autoAuth.get().username().isPresent() && autoAuth.get().password().isPresent()) {
+                    return builder.basicAuth(autoAuth.get().username().get(), autoAuth.get().password().get()).build();
+                }
+            } else {
+                if (autoAuth.get().username().isPresent() && autoAuth.get().password().isPresent()) {
+                    return builder.basicAuth(autoAuth.get().username().get(), autoAuth.get().password().get()).build();
+                }
+                if (autoAuth.get().apiToken().isPresent()) {
+                    return builder.tokenAuth(autoAuth.get().apiToken().get()).build();
+                }
             }
         }
 
