@@ -2,11 +2,10 @@ plugins {
     id 'io.kestra.gradle.repository-conventions' version '1.2.10'
     id "com.vanniktech.maven.publish" version "0.37.0"
     id "io.kestra.gradle.inject-bom-versions" version "1.2.10"
-    id "io.kestra.gradle.plugin-doc-lint" version "1.2.10"
     id 'java-library'
+    id 'java-test-fixtures'
     id "idea"
     id 'jacoco'
-    id "com.gradleup.shadow" version "9.6.1"
     id 'signing'
     id "com.github.ben-manes.versions" version "0.61.0"
     id 'net.researchgate.release' version '3.1.0'
@@ -22,7 +21,7 @@ repositories {
     }
 }
 
-final targetJavaVersion = JavaVersion.VERSION_21
+final targetJavaVersion = JavaVersion.VERSION_25
 
 java {
     sourceCompatibility = targetJavaVersion
@@ -30,7 +29,7 @@ java {
 }
 
 group = "io.kestra.plugin"
-description = 'Git Lib plugin for Kestra'
+description = 'Shared kernel library for Kestra Git plugins (OSS and EE).'
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = "UTF-8"
@@ -47,9 +46,17 @@ dependencies {
     compileOnly "org.projectlombok:lombok"
 
     // kestra
-    annotationProcessor group: "io.kestra", name: "processor", version: kestraVersion
     compileOnly group: "io.kestra", name: "core", version: kestraVersion
     compileOnly group: "io.kestra", name: "script", version: kestraVersion
+
+    // git — exposed as api so consumers (plugin-git, plugin-ee-git) inherit them transitively
+    // kept in lockstep with plugin-ee-git's jgit version to avoid silently downgrading it
+    api 'org.eclipse.jgit:org.eclipse.jgit:7.7.1.202607240634-r'
+    api 'org.eclipse.jgit:org.eclipse.jgit.ssh.jsch:7.7.1.202607240634-r'
+    api "org.eclipse.jgit:org.eclipse.jgit.http.apache:7.7.1.202607240634-r"
+
+    // kestra API client — exposed as api since consumers build KestraClient instances from the lib's classes
+    api "io.kestra:kestra-api-client:$kestraVersion"
 }
 
 
@@ -64,10 +71,14 @@ dependencies {
     // Platform
     testAnnotationProcessor enforcedPlatform("io.kestra:platform:$kestraVersion")
     testImplementation enforcedPlatform("io.kestra:platform:$kestraVersion")
+    testFixturesAnnotationProcessor enforcedPlatform("io.kestra:platform:$kestraVersion")
+    testFixturesImplementation enforcedPlatform("io.kestra:platform:$kestraVersion")
 
     // lombok
     testAnnotationProcessor "org.projectlombok:lombok"
     testCompileOnly 'org.projectlombok:lombok'
+    testFixturesAnnotationProcessor "org.projectlombok:lombok"
+    testFixturesCompileOnly 'org.projectlombok:lombok'
 
     // micronaut
     testAnnotationProcessor "io.micronaut:micronaut-inject-java"
@@ -84,10 +95,21 @@ dependencies {
     testImplementation group: "io.kestra", name: "runner-memory", version: kestraVersion
     testImplementation group: "io.kestra", name: "storage-local", version: kestraVersion
 
+    // test fixtures — shared Gitea/Kestra-container test scaffolding consumed by plugin-git and plugin-ee-git
+    testFixturesCompileOnly group: "io.kestra", name: "core", version: kestraVersion
+    testFixturesCompileOnly group: "io.kestra", name: "tests", version: kestraVersion
+    testFixturesCompileOnly "io.micronaut:micronaut-context"
+    testFixturesImplementation "io.micronaut.test:micronaut-test-junit5"
+    testFixturesImplementation "org.testcontainers:testcontainers:1.21.4"
+    testFixturesImplementation "org.testcontainers:junit-jupiter:1.21.4"
+    testFixturesImplementation "org.junit.jupiter:junit-jupiter-api"
+
     // test
     testImplementation "org.junit.jupiter:junit-jupiter-engine"
+    testImplementation "org.junit.jupiter:junit-jupiter-params"
     testImplementation "org.hamcrest:hamcrest"
     testImplementation "org.hamcrest:hamcrest-library"
+    testImplementation "ch.qos.logback:logback-classic"
 }
 
 /**********************************************************************************************************************\
@@ -115,6 +137,25 @@ jacocoTestReport {
 /**********************************************************************************************************************\
  * Publish
  **********************************************************************************************************************/
+// Gradle publishes the testFixtures feature variant as extra "optional" runtime dependencies
+// (micronaut-test-junit5, testcontainers, junit-jupiter-api) in the flattened Maven POM, since the legacy POM format
+// has no concept of feature variants. Gradle consumers (e.g. plugin-ee-git's `testFixtures(...)`) never read these:
+// they resolve the test-fixtures artifact and its dependencies through the published Gradle module metadata, which
+// this does not touch. Stripping them from the POM only keeps non-Gradle/POM-scanning consumers from seeing
+// test-only dependencies listed against the main artifact.
+def testOnlyPomArtifacts = ['micronaut-test-junit5', 'testcontainers', 'junit-jupiter', 'junit-jupiter-api']
+publishing {
+    publications.withType(MavenPublication).configureEach {
+        pom.withXml {
+            def dependencies = asNode().dependencies
+            if (dependencies) {
+                dependencies.dependency.findAll { testOnlyPomArtifacts.contains(it.artifactId.text()) }
+                    .each { dependencies[0].remove(it) }
+            }
+        }
+    }
+}
+
 mavenPublishing {
     publishToMavenCentral(true)
     signAllPublications()
@@ -148,23 +189,6 @@ tasks.withType(GenerateModuleMetadata).configureEach {
     suppressedValidationErrors.add('enforced-platform')
 }
 
-jar {
-    manifest {
-        attributes(
-            "X-Kestra-Name": project.name,
-            "X-Kestra-Title": "Git Lib",
-            "X-Kestra-Group": project.group + ".git-lib",
-            "X-Kestra-Description": project.description,
-            "X-Kestra-Version": project.version
-        )
-    }
-}
-
-shadowJar {
-    archiveClassifier.set(null)
-    mergeServiceFiles()
-}
-
 /**********************************************************************************************************************\
  * Version
  **********************************************************************************************************************/
@@ -178,6 +202,14 @@ release {
     git {
         requireBranch.set('main')
     }
+
+    // Dynamically set properties with default values
+    failOnSnapshotDependencies = (project.hasProperty('release.failOnSnapshotDependencies')
+        ? project.property('release.failOnSnapshotDependencies').toBoolean()
+        : true)
+    pushReleaseVersionBranch = (project.hasProperty('release.pushReleaseVersionBranch')
+        ? project.property('release.pushReleaseVersionBranch').toString()
+        : null)
 }
 
 /**********************************************************************************************************************\
