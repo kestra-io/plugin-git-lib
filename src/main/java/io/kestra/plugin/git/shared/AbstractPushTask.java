@@ -117,12 +117,16 @@ public abstract class AbstractPushTask<O extends AbstractPushTask.Output> extend
     protected abstract Map<Path, Supplier<InputStream>> instanceResourcesContentByPath(RunContext runContext, Path baseDirectory, List<String> globs) throws Exception;
 
     /**
-     * Removes any file from the remote that is no longer present on the instance
+     * Removes any file from the remote that is no longer present on the instance.
+     *
+     * @return whether at least one deletion was staged, so callers know a commit/push is still needed even when
+     * {@code contentByPath} ends up empty (an instance with zero resources of a kind must still push the deletion
+     * of every resource of that kind previously pushed).
      */
-    private void deleteOutdatedResources(Git git, Path basePath, Map<Path, Supplier<InputStream>> contentByPath, List<String> globs, KestraIgnore kestraIgnore)
+    private boolean deleteOutdatedResources(Git git, Path basePath, Map<Path, Supplier<InputStream>> contentByPath, List<String> globs, KestraIgnore kestraIgnore)
         throws IOException, GitAPIException {
         if (!Files.exists(basePath))
-            return;
+            return false;
 
         var workTree = git.getRepository().getWorkTree().toPath().toRealPath();
         var baseDir = basePath.toRealPath();
@@ -188,6 +192,7 @@ public abstract class AbstractPushTask<O extends AbstractPushTask.Output> extend
         if (changed.get()) {
             rm.call();
         }
+        return changed.get();
     }
 
     private static String toUnix(Path path) {
@@ -324,7 +329,7 @@ public abstract class AbstractPushTask<O extends AbstractPushTask.Output> extend
                     .setAllowEmpty(false)
                     .setMessage(message)
                     .setAuthor(author);
-                if (author != null) {
+                if (author != null && this.setCommitterFromAuthor()) {
                     commitCommand.setCommitter(author);
                 }
                 commit = commitCommand.call().getId();
@@ -367,6 +372,40 @@ public abstract class AbstractPushTask<O extends AbstractPushTask.Output> extend
         }
 
         return new PersonIdent(name, email);
+    }
+
+    /**
+     * Whether {@code .kestraignore} rules are applied to the resources fetched from the instance before they are
+     * written to Git.
+     *
+     * <p>Defaults to {@code true} (OSS, unchanged). The Enterprise Edition's apps/dashboards/unit-tests push tasks
+     * never filtered pushed content through {@code .kestraignore} and must keep not doing so.
+     */
+    protected boolean applyKestraIgnoreFiltering() {
+        return true;
+    }
+
+    /**
+     * Whether {@code git add} is called once on the whole rendered {@code gitDirectory} instead of once per
+     * resolved file path.
+     *
+     * <p>Defaults to {@code false} (OSS, unchanged: stages exactly the resolved files). The Enterprise Edition has
+     * always staged the entire directory in one call; this also means it never skipped the commit/push step when
+     * {@code contentByPath} was empty but a deletion had been staged, so this hook additionally gates that
+     * short-circuit below.
+     */
+    protected boolean stageWholeGitDirectory() {
+        return false;
+    }
+
+    /**
+     * Whether the commit author is also set as the committer.
+     *
+     * <p>Defaults to {@code true} (OSS, unchanged). The Enterprise Edition's commits have always carried the
+     * jgit-default committer instead.
+     */
+    protected boolean setCommitterFromAuthor() {
+        return true;
     }
 
     @SuppressWarnings("unchecked")
@@ -413,48 +452,55 @@ public abstract class AbstractPushTask<O extends AbstractPushTask.Output> extend
 
             this.writeResourceFiles(contentByPath);
 
-            KestraIgnore kestraIgnore = new KestraIgnore(localGitDirectory);
+            KestraIgnore kestraIgnore = this.applyKestraIgnoreFiltering() ? new KestraIgnore(localGitDirectory) : null;
 
-            Map<Path, Supplier<InputStream>> filteredContentByPath = new LinkedHashMap<>();
-            for (Map.Entry<Path, Supplier<InputStream>> e : contentByPath.entrySet()) {
-                Path p = e.getKey().normalize();
-                String filename = p.getFileName() != null ? p.getFileName().toString() : "";
+            if (kestraIgnore != null) {
+                Map<Path, Supplier<InputStream>> filteredContentByPath = new LinkedHashMap<>();
+                for (Map.Entry<Path, Supplier<InputStream>> e : contentByPath.entrySet()) {
+                    Path p = e.getKey().normalize();
+                    String filename = p.getFileName() != null ? p.getFileName().toString() : "";
 
-                if (".kestraignore".equals(filename)) {
-                    filteredContentByPath.put(e.getKey(), e.getValue());
-                    continue;
+                    if (".kestraignore".equals(filename)) {
+                        filteredContentByPath.put(e.getKey(), e.getValue());
+                        continue;
+                    }
+
+                    String rel = localGitDirectory.relativize(p).toString().replace('\\', '/');
+                    if (!kestraIgnore.isIgnoredFile(rel, false)) {
+                        filteredContentByPath.put(e.getKey(), e.getValue());
+                    } else {
+                        runContext.logger().debug("Skipped ignored file: {}", rel);
+                    }
                 }
 
-                String rel = localGitDirectory.relativize(p).toString().replace('\\', '/');
-                if (!kestraIgnore.isIgnoredFile(rel, false)) {
-                    filteredContentByPath.put(e.getKey(), e.getValue());
-                } else {
-                    runContext.logger().debug("Skipped ignored file: {}", rel);
-                }
-
+                contentByPath = filteredContentByPath;
             }
-
-            contentByPath = filteredContentByPath;
 
             boolean rDelete = runContext.render(this.delete).as(Boolean.class).orElse(true);
-            if (rDelete) {
-                this.deleteOutdatedResources(git, localGitDirectory, contentByPath, globs, kestraIgnore);
-            }
+            boolean hasStagedDeletions = rDelete && this.deleteOutdatedResources(git, localGitDirectory, contentByPath, globs, kestraIgnore);
 
-            var workTree = git.getRepository().getWorkTree().toPath().toRealPath();
+            boolean stageWholeGitDirectory = this.stageWholeGitDirectory();
 
-            if (contentByPath.isEmpty()) {
+            // Staging the whole directory is a no-op on an unchanged tree, so — unlike per-file staging, which has
+            // nothing to add when contentByPath is empty — it always proceeds to commit/push, relying on the
+            // EmptyCommitException caught in push() when there is truly nothing to commit.
+            if (!stageWholeGitDirectory && contentByPath.isEmpty() && !hasStagedDeletions) {
                 runContext.logger().info("No content to push - skipping Git operations.");
                 return output(Output.builder().build(), null);
             }
 
             AddCommand add = git.add();
-
-            for (Path p : contentByPath.keySet()) {
-                String gitRel = workTree.relativize(p.toRealPath()).toString().replace('\\', '/');
-                add.addFilepattern(gitRel);
+            if (stageWholeGitDirectory) {
+                add.addFilepattern(runContext.render(this.getGitDirectory()).as(String.class).orElse(null));
+                add.call();
+            } else if (!contentByPath.isEmpty()) {
+                var workTree = git.getRepository().getWorkTree().toPath().toRealPath();
+                for (Path p : contentByPath.keySet()) {
+                    String gitRel = workTree.relativize(p.toRealPath()).toString().replace('\\', '/');
+                    add.addFilepattern(gitRel);
+                }
+                add.call();
             }
-            add.call();
 
             Output pushOutput = this.push(git, runContext, gitService);
 
