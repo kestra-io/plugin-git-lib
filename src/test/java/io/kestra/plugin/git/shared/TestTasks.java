@@ -67,6 +67,33 @@ public final class TestTasks {
     }
 
     /**
+     * An Enterprise-Edition-style cloning task: identical to {@link TestCloningTask} but opting out of installing the
+     * JVM-global HTTP connection factory when nothing is configured (the EE seam behavior), so the shared
+     * {@code alwaysConfigureHttpTransport()} hook can be exercised from the lib's own tests.
+     */
+    @SuperBuilder
+    @ToString
+    @EqualsAndHashCode(callSuper = true)
+    @Getter
+    @NoArgsConstructor
+    public static class TestEeCloningTask extends AbstractCloningTask implements RunnableTask<VoidOutput> {
+        @Override
+        public Property<String> getBranch() {
+            return Property.ofValue("main");
+        }
+
+        @Override
+        protected boolean alwaysConfigureHttpTransport() {
+            return false;
+        }
+
+        @Override
+        public VoidOutput run(RunContext runContext) {
+            return null;
+        }
+    }
+
+    /**
      * Minimal concrete {@code AbstractPushTask}, backed by an in-memory {@code filesToWrite} map instead of a real
      * instance resource fetch, used to unit-test the shared push flow (deletion staging, commit/push, and the
      * per-edition hooks) without a registered task of its own (see AGENTS.md).

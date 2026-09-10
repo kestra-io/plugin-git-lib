@@ -19,6 +19,7 @@ import io.kestra.core.models.property.Property;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextFactory;
 import io.kestra.plugin.git.shared.TestTasks.TestCloningTask;
+import io.kestra.plugin.git.shared.TestTasks.TestEeCloningTask;
 
 import jakarta.inject.Inject;
 
@@ -149,19 +150,58 @@ class AbstractGitTaskTest {
     }
 
     /**
-     * {@code configureHttpTransport} installs a JVM-global connection factory; a task that leaves {@code noProxy}
-     * /{@code connectTimeout}/{@code readTimeout} unset must not mutate it, so it never affects an unrelated task
-     * running concurrently in the same JVM.
+     * OSS installs the JVM-global connection factory unconditionally — even with {@code noProxy}/{@code connectTimeout}
+     * /{@code readTimeout} all unset — so its 10s/60s connect/read timeout defaults always apply to a clone/push/sync.
+     * This is the pre-extraction OSS behavior the {@code alwaysConfigureHttpTransport()} hook preserves.
      */
     @Test
-    void configureHttpTransport_isNoOpWhenNothingIsConfigured() throws Exception {
+    void configureHttpTransport_installsAFactoryByDefaultForOss() throws Exception {
         HttpConnectionFactory before = HttpTransport.getConnectionFactory();
         try {
             var task = TestCloningTask.builder().build();
 
             task.configureHttpTransport(runContextFactory.of());
 
+            assertThat(HttpTransport.getConnectionFactory(), is(not(before)));
+        } finally {
+            HttpTransport.setConnectionFactory(before);
+        }
+    }
+
+    /**
+     * An edition that overrides {@code alwaysConfigureHttpTransport()} to {@code false} (the Enterprise Edition) must
+     * not mutate the JVM-global connection factory when {@code noProxy}/{@code connectTimeout}/{@code readTimeout} are
+     * all unset, so it never affects an unrelated task running concurrently in the same JVM.
+     */
+    @Test
+    void configureHttpTransport_isNoOpWhenNothingIsConfiguredAndTheEditionOptsOut() throws Exception {
+        HttpConnectionFactory before = HttpTransport.getConnectionFactory();
+        try {
+            var task = TestEeCloningTask.builder().build();
+
+            task.configureHttpTransport(runContextFactory.of());
+
             assertThat(HttpTransport.getConnectionFactory(), is(before));
+        } finally {
+            HttpTransport.setConnectionFactory(before);
+        }
+    }
+
+    /**
+     * Even an edition that opts out of the unconditional install still installs the factory once a proxy/timeout is
+     * explicitly configured.
+     */
+    @Test
+    void configureHttpTransport_installsAFactoryForAnOptedOutEditionWhenConnectTimeoutIsSet() throws Exception {
+        HttpConnectionFactory before = HttpTransport.getConnectionFactory();
+        try {
+            var task = TestEeCloningTask.builder()
+                .connectTimeout(Property.ofValue(5000))
+                .build();
+
+            task.configureHttpTransport(runContextFactory.of());
+
+            assertThat(HttpTransport.getConnectionFactory(), is(not(before)));
         } finally {
             HttpTransport.setConnectionFactory(before);
         }

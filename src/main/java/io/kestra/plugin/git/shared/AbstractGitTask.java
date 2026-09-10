@@ -182,14 +182,29 @@ public abstract class AbstractGitTask extends Task {
     protected Property<Map<String, Object>> gitConfig;
 
     /**
+     * Whether {@link #configureHttpTransport(RunContext)} should always install the connection factory, even when
+     * {@code noProxy}/{@code connectTimeout}/{@code readTimeout} are all left unset.
+     *
+     * <p>Defaults to {@code true}: OSS has always installed the factory unconditionally, applying its 10s/60s
+     * connect/read timeout defaults to every clone/push/sync. Preserving that keeps an OSS clone against an
+     * unresponsive host timing out rather than hanging on jgit's/JDK's infinite defaults. The Enterprise Edition,
+     * whose task family never called this method before the shared-kernel extraction, overrides this to {@code false}
+     * so it does not mutate the process-wide default connection factory when nothing is configured.
+     */
+    protected boolean alwaysConfigureHttpTransport() {
+        return true;
+    }
+
+    /**
      * Installs a JVM-global {@link HttpTransport} connection factory to apply {@code noProxy}/{@code connectTimeout}
-     * /{@code readTimeout}. This method is a no-op when none of the three is configured, so a task that leaves them
-     * all unset never mutates the process-wide default connection factory.
+     * /{@code readTimeout}. When {@link #alwaysConfigureHttpTransport()} is {@code false} (the Enterprise Edition),
+     * this method is a no-op unless at least one of the three is configured, so an EE task that leaves them all unset
+     * never mutates the process-wide default connection factory.
      */
     protected void configureHttpTransport(RunContext runContext) throws Exception {
         final boolean rNoProxy = this.noProxy != null && runContext.render(this.noProxy).as(Boolean.class).orElse(false);
 
-        if (!rNoProxy && this.connectTimeout == null && this.readTimeout == null) {
+        if (!alwaysConfigureHttpTransport() && !rNoProxy && this.connectTimeout == null && this.readTimeout == null) {
             return;
         }
 
