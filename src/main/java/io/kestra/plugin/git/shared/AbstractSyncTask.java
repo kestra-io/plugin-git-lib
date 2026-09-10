@@ -104,7 +104,7 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
             return;
         }
 
-        if (!gitService.branchExists(runContext, renderedBranch) && runContext.render(this.failOnMissingBranch).as(Boolean.class).orElse(true)) {
+        if (runContext.render(this.failOnMissingBranch).as(Boolean.class).orElse(true) && !gitService.branchExists(runContext, renderedBranch)) {
             throw new IllegalArgumentException(
                 String.format(
                     "Branch '%s' does not exist on repository '%s'. Sync tasks never create a missing branch: " +
