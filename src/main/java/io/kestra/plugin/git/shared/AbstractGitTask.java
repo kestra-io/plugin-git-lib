@@ -156,19 +156,19 @@ public abstract class AbstractGitTask extends Task {
 
     @Schema(
         title = "HTTP connect timeout (ms)",
-        description = "Default 10000 ms."
+        description = "Default 10000 ms.",
+        defaultValue = "10000"
     )
-    @Builder.Default
     @PluginProperty(group = "execution")
-    protected Property<Integer> connectTimeout = Property.ofValue(10000);
+    protected Property<Integer> connectTimeout;
 
     @Schema(
         title = "HTTP read timeout (ms)",
-        description = "Default 60000 ms."
+        description = "Default 60000 ms.",
+        defaultValue = "60000"
     )
-    @Builder.Default
     @PluginProperty(group = "execution")
-    protected Property<Integer> readTimeout = Property.ofValue(60000);
+    protected Property<Integer> readTimeout;
 
     @Schema(
         title = "Git configuration overrides",
@@ -181,11 +181,20 @@ public abstract class AbstractGitTask extends Task {
     @PluginProperty(group = "advanced")
     protected Property<Map<String, Object>> gitConfig;
 
+    /**
+     * Installs a JVM-global {@link HttpTransport} connection factory to apply {@code noProxy}/{@code connectTimeout}
+     * /{@code readTimeout}. This method is a no-op when none of the three is configured, so a task that leaves them
+     * all unset never mutates the process-wide default connection factory.
+     */
     protected void configureHttpTransport(RunContext runContext) throws Exception {
-
         final boolean rNoProxy = this.noProxy != null && runContext.render(this.noProxy).as(Boolean.class).orElse(false);
-        final Integer rConnectTimeout = runContext.render(this.connectTimeout).as(Integer.class).orElse(10000);
-        final Integer rReadTimeout = runContext.render(this.readTimeout).as(Integer.class).orElse(60000);
+
+        if (!rNoProxy && this.connectTimeout == null && this.readTimeout == null) {
+            return;
+        }
+
+        final Integer rConnectTimeout = this.connectTimeout == null ? 10000 : runContext.render(this.connectTimeout).as(Integer.class).orElse(10000);
+        final Integer rReadTimeout = this.readTimeout == null ? 60000 : runContext.render(this.readTimeout).as(Integer.class).orElse(60000);
 
         runContext.logger().debug("Configured with noProxy: {}", rNoProxy);
         HttpTransport.setConnectionFactory(new HttpClientConnectionFactory() {

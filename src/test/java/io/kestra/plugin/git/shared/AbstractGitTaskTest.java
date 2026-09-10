@@ -9,7 +9,9 @@ import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.LsRemoteCommand;
 import org.eclipse.jgit.api.TransportCommand;
 import org.eclipse.jgit.lib.PersonIdent;
+import org.eclipse.jgit.transport.HttpTransport;
 import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider;
+import org.eclipse.jgit.transport.http.HttpConnectionFactory;
 import org.junit.jupiter.api.Test;
 
 import io.kestra.core.junit.annotations.KestraTest;
@@ -23,6 +25,7 @@ import jakarta.inject.Inject;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 
 @KestraTest
@@ -142,6 +145,57 @@ class AbstractGitTaskTest {
 
             assertThat(git.getRepository().getConfig().getBoolean("core", null, "fileMode", true), is(false));
             assertThat(git.getRepository().getConfig().getString("user", null, "name"), is("kestra"));
+        }
+    }
+
+    /**
+     * {@code configureHttpTransport} installs a JVM-global connection factory; a task that leaves {@code noProxy}
+     * /{@code connectTimeout}/{@code readTimeout} unset must not mutate it, so it never affects an unrelated task
+     * running concurrently in the same JVM.
+     */
+    @Test
+    void configureHttpTransport_isNoOpWhenNothingIsConfigured() throws Exception {
+        HttpConnectionFactory before = HttpTransport.getConnectionFactory();
+        try {
+            var task = TestCloningTask.builder().build();
+
+            task.configureHttpTransport(runContextFactory.of());
+
+            assertThat(HttpTransport.getConnectionFactory(), is(before));
+        } finally {
+            HttpTransport.setConnectionFactory(before);
+        }
+    }
+
+    @Test
+    void configureHttpTransport_installsAFactoryWhenNoProxyIsSet() throws Exception {
+        HttpConnectionFactory before = HttpTransport.getConnectionFactory();
+        try {
+            var task = TestCloningTask.builder()
+                .noProxy(Property.ofValue(true))
+                .build();
+
+            task.configureHttpTransport(runContextFactory.of());
+
+            assertThat(HttpTransport.getConnectionFactory(), is(not(before)));
+        } finally {
+            HttpTransport.setConnectionFactory(before);
+        }
+    }
+
+    @Test
+    void configureHttpTransport_installsAFactoryWhenConnectTimeoutIsSet() throws Exception {
+        HttpConnectionFactory before = HttpTransport.getConnectionFactory();
+        try {
+            var task = TestCloningTask.builder()
+                .connectTimeout(Property.ofValue(5000))
+                .build();
+
+            task.configureHttpTransport(runContextFactory.of());
+
+            assertThat(HttpTransport.getConnectionFactory(), is(not(before)));
+        } finally {
+            HttpTransport.setConnectionFactory(before);
         }
     }
 }
