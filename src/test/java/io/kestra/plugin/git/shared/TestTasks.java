@@ -103,12 +103,19 @@ public final class TestTasks {
     @EqualsAndHashCode(callSuper = true)
     @Getter
     @NoArgsConstructor
-    public static class TestPushTask extends AbstractPushTask<AbstractPushTask.Output> {
+    public static class TestPushTask extends AbstractPushTask<TestPushTask.Output> {
         @Builder.Default
         private Property<String> gitDirectory = Property.ofValue(".");
 
         @Builder.Default
         private Map<String, String> filesToWrite = Map.of();
+
+        /**
+         * Globs restricting which resources are considered current on the instance, mirroring a concrete task's
+         * {@code flows}/{@code namespaceFiles}-style filter — needed to exercise {@code deleteOutdatedResources}'
+         * glob-matching (path, filename, and stem) from the shared kernel's own tests.
+         */
+        private List<String> globs;
 
         @Override
         public Property<String> getBranch() {
@@ -127,7 +134,7 @@ public final class TestTasks {
 
         @Override
         public Object globs() {
-            return null;
+            return globs;
         }
 
         @Override
@@ -144,8 +151,40 @@ public final class TestTasks {
         }
 
         @Override
-        protected AbstractPushTask.Output output(AbstractPushTask.Output pushOutput, URI diffFileStorageUri) {
-            return pushOutput;
+        protected Output output(AbstractPushTask.Output pushOutput, URI diffFileStorageUri) {
+            return Output.builder()
+                .commitId(pushOutput.getCommitId())
+                .commitURL(pushOutput.getCommitURL())
+                .diffFileStorageUri(diffFileStorageUri)
+                .build();
+        }
+
+        @SuperBuilder
+        @Getter
+        public static class Output extends AbstractPushTask.Output {
+            private URI diffFileStorageUri;
+
+            @Override
+            public URI diffFileUri() {
+                return diffFileStorageUri;
+            }
+        }
+    }
+
+    /**
+     * An Enterprise-Edition-style push task: identical to {@link TestPushTask} but staging the whole git directory
+     * in one {@code git add} call instead of per resolved file (the EE seam behavior), so {@code DELETE_ONLY}'s
+     * {@code AddCommand}-skip can be verified against that code path too.
+     */
+    @SuperBuilder(toBuilder = true)
+    @ToString
+    @EqualsAndHashCode(callSuper = true)
+    @Getter
+    @NoArgsConstructor
+    public static class TestEeStylePushTask extends TestPushTask {
+        @Override
+        protected boolean stageWholeGitDirectory() {
+            return true;
         }
     }
 

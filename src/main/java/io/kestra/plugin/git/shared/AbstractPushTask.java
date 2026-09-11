@@ -100,6 +100,26 @@ public abstract class AbstractPushTask<O extends AbstractPushTask.Output> extend
     @PluginProperty(group = "advanced")
     private Property<Boolean> delete = Property.ofValue(true);
 
+    @Schema(
+        title = "Push mode",
+        description = """
+            `SYNC` (default) writes every matched resource to the work tree and stages it, in addition to staging \
+            removals when `delete` is true — this is the standard push behavior, unchanged.
+
+            `DELETE_ONLY` stages only the removal of resources no longer present on the instance: it leaves \
+            already-pushed, still-matching resources untouched even if they changed since the last push. Use it to \
+            push a deletion without re-pushing unrelated modified resources. `DELETE_ONLY` implies deletion \
+            staging, so setting `delete` to false together with `DELETE_ONLY` is ignored (a warning is logged)."""
+    )
+    @Builder.Default
+    @PluginProperty(group = "advanced")
+    private Property<PushMode> pushMode = Property.ofValue(PushMode.SYNC);
+
+    public enum PushMode {
+        SYNC,
+        DELETE_ONLY
+    }
+
     public abstract Property<String> getCommitMessage();
 
     public abstract Property<String> getGitDirectory();
@@ -450,7 +470,12 @@ public abstract class AbstractPushTask<O extends AbstractPushTask.Output> extend
 
             Map<Path, Supplier<InputStream>> contentByPath = this.instanceResourcesContentByPath(runContext, localGitDirectory, globs);
 
-            this.writeResourceFiles(contentByPath);
+            PushMode rPushMode = runContext.render(this.pushMode).as(PushMode.class).orElse(PushMode.SYNC);
+            boolean deleteOnly = rPushMode == PushMode.DELETE_ONLY;
+
+            if (!deleteOnly) {
+                this.writeResourceFiles(contentByPath);
+            }
 
             KestraIgnore kestraIgnore = this.applyKestraIgnoreFiltering() ? new KestraIgnore(localGitDirectory) : null;
 
@@ -477,29 +502,40 @@ public abstract class AbstractPushTask<O extends AbstractPushTask.Output> extend
             }
 
             boolean rDelete = runContext.render(this.delete).as(Boolean.class).orElse(true);
-            boolean hasStagedDeletions = rDelete && this.deleteOutdatedResources(git, localGitDirectory, contentByPath, globs, kestraIgnore);
+            if (deleteOnly && !rDelete) {
+                runContext.logger().warn("pushMode is DELETE_ONLY, so deletions are staged even though delete is false");
+            }
+            boolean hasStagedDeletions = (deleteOnly || rDelete) && this.deleteOutdatedResources(git, localGitDirectory, contentByPath, globs, kestraIgnore);
 
             boolean stageWholeGitDirectory = this.stageWholeGitDirectory();
 
             // Staging the whole directory is a no-op on an unchanged tree, so — unlike per-file staging, which has
             // nothing to add when contentByPath is empty — it always proceeds to commit/push, relying on the
-            // EmptyCommitException caught in push() when there is truly nothing to commit.
-            if (!stageWholeGitDirectory && contentByPath.isEmpty() && !hasStagedDeletions) {
+            // EmptyCommitException caught in push() when there is truly nothing to commit. In DELETE_ONLY mode
+            // nothing is ever staged from contentByPath, so a staged deletion is the only thing that can justify
+            // proceeding.
+            boolean skipGitOperations = deleteOnly
+                ? !hasStagedDeletions
+                : !stageWholeGitDirectory && contentByPath.isEmpty() && !hasStagedDeletions;
+
+            if (skipGitOperations) {
                 runContext.logger().info("No content to push - skipping Git operations.");
                 return output(Output.builder().build(), null);
             }
 
-            AddCommand add = git.add();
-            if (stageWholeGitDirectory) {
-                add.addFilepattern(runContext.render(this.getGitDirectory()).as(String.class).orElse(null));
-                add.call();
-            } else if (!contentByPath.isEmpty()) {
-                var workTree = git.getRepository().getWorkTree().toPath().toRealPath();
-                for (Path p : contentByPath.keySet()) {
-                    String gitRel = workTree.relativize(p.toRealPath()).toString().replace('\\', '/');
-                    add.addFilepattern(gitRel);
+            if (!deleteOnly) {
+                AddCommand add = git.add();
+                if (stageWholeGitDirectory) {
+                    add.addFilepattern(runContext.render(this.getGitDirectory()).as(String.class).orElse(null));
+                    add.call();
+                } else if (!contentByPath.isEmpty()) {
+                    var workTree = git.getRepository().getWorkTree().toPath().toRealPath();
+                    for (Path p : contentByPath.keySet()) {
+                        String gitRel = workTree.relativize(p.toRealPath()).toString().replace('\\', '/');
+                        add.addFilepattern(gitRel);
+                    }
+                    add.call();
                 }
-                add.call();
             }
 
             Output pushOutput = this.push(git, runContext, gitService);
