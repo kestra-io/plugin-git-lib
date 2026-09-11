@@ -51,9 +51,9 @@ dependencies {
 
     // git — exposed as api so consumers (plugin-git, plugin-ee-git) inherit them transitively
     // kept in lockstep with plugin-ee-git's jgit version to avoid silently downgrading it
-    api 'org.eclipse.jgit:org.eclipse.jgit:7.7.1.202607240634-r'
-    api 'org.eclipse.jgit:org.eclipse.jgit.ssh.jsch:7.7.1.202607240634-r'
-    api "org.eclipse.jgit:org.eclipse.jgit.http.apache:7.7.1.202607240634-r"
+    api 'org.eclipse.jgit:org.eclipse.jgit:7.8.0.202609011348-r'
+    api 'org.eclipse.jgit:org.eclipse.jgit.ssh.jsch:7.8.0.202609011348-r'
+    api "org.eclipse.jgit:org.eclipse.jgit.http.apache:7.8.0.202609011348-r"
 
     // kestra API client — exposed as api since consumers build KestraClient instances from the lib's classes
     api "io.kestra:kestra-api-client:$kestraVersion"
