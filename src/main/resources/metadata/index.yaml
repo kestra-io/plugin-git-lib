@@ -1,8 +1,0 @@
-group: io.kestra.plugin.git.shared
-name: "git-lib"
-title: "Git shared kernel"
-description: "Shared kernel library for Kestra Git plugins (OSS and EE)."
-body: ""
-videos: []
-createdBy: "Kestra Core Team"
-managedBy: "Kestra Core Team"
