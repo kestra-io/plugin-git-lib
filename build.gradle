@@ -100,8 +100,8 @@ dependencies {
     testFixturesCompileOnly group: "io.kestra", name: "tests", version: kestraVersion
     testFixturesCompileOnly "io.micronaut:micronaut-context"
     testFixturesImplementation "io.micronaut.test:micronaut-test-junit5"
-    testFixturesImplementation "org.testcontainers:testcontainers:1.21.4"
-    testFixturesImplementation "org.testcontainers:junit-jupiter:1.21.4"
+    testFixturesImplementation "org.testcontainers:testcontainers:2.0.5"
+    testFixturesImplementation "org.testcontainers:junit-jupiter:2.0.5"
     testFixturesImplementation "org.junit.jupiter:junit-jupiter-api"
 
     // test
