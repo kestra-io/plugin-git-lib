@@ -22,7 +22,8 @@ final class KestraApiConnection {
     private static final String DEFAULT_URL = "http://localhost:8080";
     private static final String URL_TEMPLATE = "{{ kestra.url }}";
     private static final String NO_AUTH_MESSAGE = "No authentication method provided. Set 'auth.apiToken', or " +
-        "'auth.username' and 'auth.password', or configure a default one with the 'kestra.tasks.sdk.authentication' properties.";
+        "'auth.username' and 'auth.password', or configure a default one with the 'kestra.tasks.sdk.authentication' properties. " +
+        "If this API requires no authentication, set 'auth.auto' to false and leave the credentials unset.";
 
     private final String url;
     private final DefaultAuthSupplier defaultAuth;
@@ -42,25 +43,46 @@ final class KestraApiConnection {
         return defaultAuth.get();
     }
 
+    /** Whether the default SDK authentication may be used, i.e. {@code auth.auto} is on. */
+    boolean auto() {
+        return defaultAuth.enabled;
+    }
+
     /**
      * Builds a {@link KestraClient} for the given task {@code kestraUrl}/{@code auth} properties.
      *
-     * <p>Shared by every {@code kestraClient()} implementation in this hierarchy ({@code AbstractCloningTask},
-     * {@code AbstractKestraTask}) so the bulk of the authentication resolution and the error messages can never
-     * drift between them: explicit {@code auth.apiToken} or {@code auth.username}/{@code auth.password}, then the
-     * default SDK authentication (unless {@code auth.auto} opts out).
+     * <p>{@code auth.auto} chooses where the credentials are read from, not whether the call is authenticated.
+     * Together with whether the task sets a credential of its own, it expresses the three supported scenarios:
+     *
+     * <ul>
+     *   <li><b>Authenticated with the task's own credentials</b> — {@code auth.apiToken}, or {@code auth.username}
+     *       and {@code auth.password}, set on the task. They always win, whatever {@code auth.auto} is set to.</li>
+     *   <li><b>Authenticated from the Kestra configuration</b> — {@code auth.auto} on (the default) and no
+     *       credential on the task. The default SDK authentication is used, which an administrator sets through the
+     *       {@code kestra.tasks.sdk.authentication} properties or, on the Enterprise Edition, at the tenant or the
+     *       namespace level. It carries the API URL as well as the credentials.</li>
+     *   <li><b>Unauthenticated</b> — {@code auth.auto} off and no credential on the task. Turning {@code auth.auto}
+     *       off means "use only what this task declares"; declaring nothing therefore means calling the API with no
+     *       credentials at all, so the client is built with {@code noAuth()} and sends no {@code Authorization}
+     *       header. This is the only way to reach a Kestra API that requires none.</li>
+     * </ul>
+     *
+     * <p>The fourth combination — {@code auth.auto} on, no credential on the task, and nothing configured for the
+     * instance to fall back on — is a configuration error rather than a scenario. A task family that requires
+     * authentication ({@code requireAuthentication}) then fails with {@link #NO_AUTH_MESSAGE} instead of quietly
+     * calling unauthenticated, since nothing in the flow said that was the intent.
+     *
+     * <p>{@code requireAuthentication} is what separates the two families in that last case:
+     * {@code AbstractKestraTask} (whose {@code auth} property is mandatory) throws. {@code AbstractCloningTask}
+     * (whose {@code auth} property is optional, used by {@code Clone}/{@code Push*}/{@code Sync*}/
+     * {@code NamespaceSync}) preserves its long-standing behavior of returning an unauthenticated client, since
+     * some deployments legitimately point these tasks at a Kestra API that does not require authentication and
+     * existing flows rely on that. Tracked for a follow-up decision on whether to align it with the strict
+     * behavior.
      *
      * <p>{@code family} carries the two ways the two hierarchies have always differed and must keep differing
      * (see {@link KestraTaskFamily}): which credential wins in the default SDK authentication when it carries both
      * a token and Basic credentials, and how strictly the explicit mutual-exclusion is enforced.
-     *
-     * <p>{@code requireAuthentication} controls what happens when none of the above resolves:
-     * {@code AbstractKestraTask} (whose {@code auth} property is mandatory) throws an actionable
-     * {@link IllegalArgumentException}. {@code AbstractCloningTask} (whose {@code auth} property is optional, used
-     * by {@code Clone}/{@code Push*}/{@code Sync*}/{@code NamespaceSync}) currently preserves its long-standing
-     * behavior of returning an unauthenticated client, since some deployments legitimately point these tasks at a
-     * Kestra API that does not require authentication and existing flows rely on that. Tracked for a follow-up
-     * decision on whether to align it with the strict behavior.
      */
     static KestraClient buildClient(RunContext runContext, @Nullable Property<String> kestraUrl, @Nullable KestraApiAuth auth, boolean requireAuthentication, KestraTaskFamily family) throws IllegalVariableEvaluationException {
         KestraApiConnection connection = resolve(runContext, kestraUrl, auth);
@@ -113,11 +135,11 @@ final class KestraApiConnection {
             }
         }
 
-        if (requireAuthentication) {
+        if (requireAuthentication && connection.auto()) {
             throw new IllegalArgumentException(NO_AUTH_MESSAGE);
         }
 
-        return builder.build();
+        return builder.noAuth().build();
     }
 
     /**

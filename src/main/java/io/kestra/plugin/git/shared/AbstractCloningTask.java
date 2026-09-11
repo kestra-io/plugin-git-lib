@@ -58,6 +58,11 @@ public abstract class AbstractCloningTask extends AbstractGitTask {
      * fallback (several OSS test suites do the same). A task family that must never silently proceed
      * unauthenticated — e.g. the Enterprise Edition's {@code NamespaceSync}, which manages namespace contents —
      * overrides this to {@code true} instead of relying on the lenient OSS-oriented default.
+     *
+     * <p>"Silently" is the operative word: this only covers the case where the task said nothing about
+     * credentials. Setting {@code auth.auto} to {@code false} without any credential is an explicit statement
+     * that the target API needs none, and still yields an unauthenticated client here (see
+     * {@link KestraApiConnection#buildClient}).
      */
     protected boolean requireKestraAuthentication() {
         return false;
@@ -125,7 +130,8 @@ public abstract class AbstractCloningTask extends AbstractGitTask {
                 - Set `kestra.tasks.sdk.authentication.url` for the API URL
                 - Set `kestra.tasks.sdk.authentication.api-token` for API token auth
                 - Set `kestra.tasks.sdk.authentication.username` and `kestra.tasks.sdk.authentication.password` for HTTP Basic auth
-                The Enterprise Edition also allows an administrator to set these defaults at the namespace or the tenant level."""
+                The Enterprise Edition also allows an administrator to set these defaults at the namespace or the tenant level.
+                Set this to `false` without any credentials to call a Kestra API that requires no authentication."""
         )
         @Builder.Default
         @PluginProperty(group = "advanced")

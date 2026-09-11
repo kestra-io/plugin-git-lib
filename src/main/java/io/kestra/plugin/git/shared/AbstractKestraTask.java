@@ -65,7 +65,8 @@ public abstract class AbstractKestraTask extends AbstractGitTask {
                 - Set `kestra.tasks.sdk.authentication.url` to use a given API URL
                 - Set `kestra.tasks.sdk.authentication.api-token` to use an API token
                 - Set `kestra.tasks.sdk.authentication.username` and `kestra.tasks.sdk.authentication.password` for HTTP basic authentication
-                The Enterprise edition also provides setting a default configuration at the Namespace of Tenant level by an administrator."""
+                The Enterprise edition also provides setting a default configuration at the Namespace of Tenant level by an administrator.
+                Set this to `false` without any credentials to call a Kestra API that requires no authentication."""
         )
         @Builder.Default
         @PluginProperty(group = "advanced")

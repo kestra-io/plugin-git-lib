@@ -22,7 +22,7 @@ import jakarta.inject.Inject;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
-import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.startsWith;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -145,7 +145,7 @@ class KestraApiConnectionTest {
     void cloningTask_stillReturnsAnUnauthenticatedClientWhenNoAuthenticationResolves() throws Exception {
         var task = cloningTask().build();
 
-        assertThat(task.kestraClient(runContextFactory.of()), notNullValue());
+        assertThat(authorizationHeader(task.kestraClient(runContextFactory.of())), nullValue());
     }
 
     /**
@@ -166,7 +166,7 @@ class KestraApiConnectionTest {
 
         assertThat(
             e.getMessage(),
-            is("No authentication method provided. Set 'auth.apiToken', or 'auth.username' and 'auth.password', or configure a default one with the 'kestra.tasks.sdk.authentication' properties.")
+            is("No authentication method provided. Set 'auth.apiToken', or 'auth.username' and 'auth.password', or configure a default one with the 'kestra.tasks.sdk.authentication' properties. If this API requires no authentication, set 'auth.auto' to false and leave the credentials unset.")
         );
     }
 
@@ -242,18 +242,54 @@ class KestraApiConnectionTest {
         assertThat(authorizationHeader(task.kestraClient(runContextFactory.of())), startsWith("Basic "));
     }
 
-    /** The SDK builder defaults to Basic auth, so building a client without credentials would send `Basic base64("null:null")`. */
+    /**
+     * Opting out of the default authentication without setting any credential is how a task declares that the
+     * Kestra API it targets requires none. The default SDK authentication below carries both a token and Basic
+     * credentials, so the absent header also proves the opt-out ignores what was available rather than merely
+     * failing to find anything.
+     */
     @Test
-    void shouldFailWhenAutoIsDisabledWithoutCredentials() throws Exception {
+    void shouldSendNoAuthorizationHeaderWhenAutoIsDisabledWithoutCredentials() throws Exception {
         var task = TestKestraTask.builder()
             .id("kestraTask")
             .type(TestKestraTask.class.getName())
-            .url(Property.ofValue("https://github.com/kestra-io/plugin-git"))
             .auth(AbstractKestraTask.Auth.builder().auto(Property.ofValue(false)).build())
+            .build();
+        var runContext = runContextWithSdkBasicAndTokenAuth(task, "default-user", "default-pass", "default-token");
+
+        assertThat(authorizationHeader(task.kestraClient(runContext)), nullValue());
+    }
+
+    /** Only the explicit opt-out unlocks the unauthenticated client: leaving `auth.auto` on still fails fast. */
+    @Test
+    void shouldFailWhenNoAuthenticationResolvesAndAutoIsEnabled() throws Exception {
+        var task = TestKestraTask.builder()
+            .id("kestraTask")
+            .type(TestKestraTask.class.getName())
+            .auth(AbstractKestraTask.Auth.builder().build())
             .build();
 
         RunContext runContext = runContextWithSdkUrl(task, SDK_DEFAULT_URL);
 
-        assertThrows(IllegalArgumentException.class, () -> task.kestraClient(runContext));
+        var e = assertThrows(IllegalArgumentException.class, () -> task.kestraClient(runContext));
+
+        assertThat(
+            e.getMessage(),
+            is("No authentication method provided. Set 'auth.apiToken', or 'auth.username' and 'auth.password', or configure a default one with the 'kestra.tasks.sdk.authentication' properties. If this API requires no authentication, set 'auth.auto' to false and leave the credentials unset.")
+        );
+    }
+
+    /** The opt-out also covers the strict cloning family, which would otherwise have no way to reach an unsecured API. */
+    @Test
+    void cloningTask_sendsNoAuthorizationHeaderWhenAutoIsDisabledAndAuthenticationIsRequired() throws Exception {
+        var task = new TestCloningTask() {
+            @Override
+            protected boolean requireKestraAuthentication() {
+                return true;
+            }
+        };
+        task.auth = AbstractCloningTask.Auth.builder().auto(Property.ofValue(false)).build();
+
+        assertThat(authorizationHeader(task.kestraClient(runContextFactory.of())), nullValue());
     }
 }
