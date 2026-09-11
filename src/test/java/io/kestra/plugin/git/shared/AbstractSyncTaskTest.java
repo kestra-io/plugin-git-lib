@@ -3,12 +3,16 @@ package io.kestra.plugin.git.shared;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 
+import org.eclipse.jgit.api.Git;
 import org.junit.jupiter.api.Test;
 
 import io.kestra.core.junit.annotations.KestraTest;
+import io.kestra.core.models.property.Property;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextFactory;
 import io.kestra.plugin.git.shared.TestTasks.TestSyncTask;
@@ -16,15 +20,98 @@ import io.kestra.plugin.git.shared.TestTasks.TestSyncTask;
 import jakarta.inject.Inject;
 
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @KestraTest
 class AbstractSyncTaskTest {
 
     @Inject
     private RunContextFactory runContextFactory;
+
+    private Path newRemoteWithDefaultBranchContent() throws Exception {
+        Path remote = Files.createTempDirectory("sync-task-remote-");
+        try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
+            Files.writeString(remote.resolve("file.txt"), "hello\n");
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("init").call();
+        }
+        return remote;
+    }
+
+    /**
+     * Reproduces kestra-io/plugin-git#343: syncing a `branch` that does not exist on the remote used to silently
+     * fall back to the repository's default branch instead of failing, so with `delete` set to true, every
+     * namespace resource that only existed on the requested branch was wiped out while the execution still
+     * reported SUCCESS. The task must now fail loudly and must not delete anything.
+     */
+    @Test
+    void run_failsAndDoesNotDeleteWhenBranchDoesNotExistOnRemote() throws Exception {
+        Path remote = newRemoteWithDefaultBranchContent();
+        RunContext runContext = runContextFactory.of();
+        List<String> deletedResources = new CopyOnWriteArrayList<>();
+
+        TestSyncTask task = TestSyncTask.builder()
+            .url(Property.ofValue(remote.toUri().toString()))
+            .branch(Property.ofValue("missing-branch"))
+            .delete(Property.ofValue(true))
+            .existingResources(List.of("/stale-resource.txt"))
+            .deletedResources(deletedResources)
+            .build();
+
+        assertThrows(IllegalArgumentException.class, () -> task.run(runContext));
+        assertThat(deletedResources, empty());
+    }
+
+    /**
+     * `failOnMissingBranch` is an explicit opt-out that preserves the pre-fix behavior (create the branch locally
+     * from the default HEAD) for callers that rely on it.
+     */
+    @Test
+    void run_fallsBackToDefaultBranchWhenFailOnMissingBranchIsFalse() throws Exception {
+        Path remote = newRemoteWithDefaultBranchContent();
+        RunContext runContext = runContextFactory.of();
+        List<String> deletedResources = new CopyOnWriteArrayList<>();
+
+        TestSyncTask task = TestSyncTask.builder()
+            .url(Property.ofValue(remote.toUri().toString()))
+            .branch(Property.ofValue("missing-branch"))
+            .delete(Property.ofValue(true))
+            .failOnMissingBranch(Property.ofValue(false))
+            .existingResources(List.of("/stale-resource.txt"))
+            .deletedResources(deletedResources)
+            .build();
+
+        task.run(runContext);
+
+        assertThat(deletedResources, hasItem("/stale-resource.txt"));
+    }
+
+    /** The happy path — an existing branch — must keep working: the branch check must not be a false positive. */
+    @Test
+    void run_syncsNormallyWhenBranchExistsOnRemote() throws Exception {
+        Path remote = newRemoteWithDefaultBranchContent();
+        try (Git git = Git.open(remote.toFile())) {
+            git.branchCreate().setName("feature").call();
+        }
+        RunContext runContext = runContextFactory.of();
+        List<String> deletedResources = new CopyOnWriteArrayList<>();
+
+        TestSyncTask task = TestSyncTask.builder()
+            .url(Property.ofValue(remote.toUri().toString()))
+            .branch(Property.ofValue("feature"))
+            .delete(Property.ofValue(true))
+            .existingResources(List.of("/file.txt"))
+            .deletedResources(deletedResources)
+            .build();
+
+        task.run(runContext);
+
+        assertThat(deletedResources, empty());
+    }
 
     /**
      * These hooks default to OSS's unchanged behavior; an edition-specific base class overrides them instead of

@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Supplier;
 
 import io.kestra.core.models.property.Property;
@@ -202,14 +203,28 @@ public final class TestTasks {
         @Builder.Default
         private Property<String> gitDirectory = Property.ofValue(".");
 
+        @Builder.Default
+        private Property<String> branch = Property.ofValue("main");
+
+        @Builder.Default
+        private Property<Boolean> delete = Property.ofValue(false);
+
+        /** Pre-existing instance resources fetched before the sync; each entry must be a valid resource URI string (see {@link #toUri}). */
+        @Builder.Default
+        private List<String> existingResources = List.of();
+
+        /** Records every resource the sync actually deletes, so tests can assert nothing was deleted on failure. */
+        @Builder.Default
+        private List<String> deletedResources = new CopyOnWriteArrayList<>();
+
         @Override
         public Property<String> getBranch() {
-            return Property.ofValue("main");
+            return branch;
         }
 
         @Override
         public Property<Boolean> getDelete() {
-            return Property.ofValue(false);
+            return delete;
         }
 
         @Override
@@ -224,6 +239,7 @@ public final class TestTasks {
 
         @Override
         protected void deleteResource(RunContext runContext, String renderedNamespace, String instanceResource) {
+            deletedResources.add(instanceResource);
         }
 
         @Override
@@ -243,7 +259,7 @@ public final class TestTasks {
 
         @Override
         protected List<String> fetchResources(RunContext runContext, String renderedNamespace) {
-            return List.of();
+            return existingResources;
         }
 
         @Override

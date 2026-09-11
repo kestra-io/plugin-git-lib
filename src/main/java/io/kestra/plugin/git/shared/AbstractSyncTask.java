@@ -60,6 +60,17 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
     @PluginProperty(group = "advanced")
     private Property<Boolean> failOnMissingDirectory = Property.ofValue(true);
 
+    @Schema(
+        title = "Fail if branch missing",
+        description = "Default true. If false, falls back to creating the requested branch from the repository's " +
+            "default branch when the rendered `branch` does not exist on the remote. This means the sync then reads " +
+            "content from the default branch instead of the requested one, and with `delete` set to true it can " +
+            "delete namespace content that only exists on the requested branch."
+    )
+    @Builder.Default
+    @PluginProperty(group = "advanced")
+    private Property<Boolean> failOnMissingBranch = Property.ofValue(true);
+
     public abstract Property<Boolean> getDelete();
 
     public abstract Property<String> getGitDirectory();
@@ -224,7 +235,10 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
 
         gitService.namespaceAccessGuard(runContext, this.fetchedNamespace());
 
-        try (var git = gitService.cloneBranch(runContext, runContext.render(this.getBranch()).as(String.class).orElse(null), this.cloneSubmodules)) {
+        String renderedBranch = runContext.render(this.getBranch()).as(String.class).orElse(null);
+        gitService.ensureBranchExistsOrFail(runContext, renderedBranch, runContext.render(this.failOnMissingBranch).as(Boolean.class).orElse(true));
+
+        try (var git = gitService.cloneBranch(runContext, renderedBranch, this.cloneSubmodules)) {
             Path localGitDirectory = this.createGitDirectory(runContext);
             Map<URI, Supplier<InputStream>> gitContentByUri = this.gitResourcesContentByUri(localGitDirectory, runContext);
 

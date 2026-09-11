@@ -61,6 +61,31 @@ public class GitService {
             .containsKey(R_HEADS + branch);
     }
 
+    /**
+     * Fails when {@code branch} is not present on the remote, so a read/sync operation never silently falls back to
+     * the repository's default branch (see {@code cloneBranch}, which would otherwise create the missing branch from
+     * the default HEAD). No-op when {@code failOnMissing} is false or {@code branch} is null/blank (no branch requested
+     * means the default branch is intended).
+     */
+    public void ensureBranchExistsOrFail(RunContext runContext, String branch, boolean failOnMissing) throws Exception {
+        if (!failOnMissing || branch == null || branch.isBlank()) {
+            return;
+        }
+
+        if (!branchExists(runContext, branch)) {
+            throw new IllegalArgumentException(
+                String.format(
+                    "Branch '%s' does not exist on repository '%s'. Git sync tasks never create a missing branch, " +
+                        "because that silently reads from the repository's default branch instead. Create the branch " +
+                        "on the remote, fix the `branch` property, or set `failOnMissingBranch` to false to allow the " +
+                        "fallback.",
+                    branch,
+                    runContext.render(gitTask.getUrl()).as(String.class).orElse(null)
+                )
+            );
+        }
+    }
+
     public String getHttpUrl(String gitUrl) {
         String httpUrl = gitUrl;
         // SSH URL
