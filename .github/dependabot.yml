@@ -25,3 +25,7 @@ updates:
       kestra-gradle-plugins:
         patterns:
           - "io.kestra.gradle.*"
+      # jgit artifacts must stay version-aligned, so bump them together in one PR
+      jgit:
+        patterns:
+          - "org.eclipse.jgit:*"
