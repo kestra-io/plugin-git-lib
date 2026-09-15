@@ -60,6 +60,9 @@ plugin release referencing an unpublished lib version fails to resolve.
 
 - Do not add a registered task or trigger to this repository — that breaks the shared-kernel invariant that both
   `plugin-git` and `plugin-ee-git` rely on (see `plugin-azure-lib` / `plugin-kubernetes-lib` for the same rule).
+- Do not ship a `src/main/resources/metadata/index.yaml`: this library registers no `@Plugin`, so the file has no
+  scanner to describe, and since `plugin-git`/`plugin-ee-git` shade this library into their own `shadowJar`, it would
+  collide with the consuming plugin's own `metadata/index.yaml` at the same jar path.
 - `NamespaceSync` and `TenantSync` (and their EE app/blueprint/dashboard/unit-test counterparts) are **not** unified
   here — that is a separate, larger effort (pluggable resource-kind design) tracked outside Phase 1 of the
   shared-kernel extraction.
