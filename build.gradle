@@ -54,8 +54,9 @@ dependencies {
     api 'org.eclipse.jgit:org.eclipse.jgit.ssh.jsch:7.8.0.202609011348-r'
     api "org.eclipse.jgit:org.eclipse.jgit.http.apache:7.8.0.202609011348-r"
 
-    // kestra API client — exposed as api since consumers build KestraClient instances from the lib's classes
-    api "io.kestra:kestra-api-client:$kestraVersion"
+    // kestra API client: exposed as api since consumers build KestraClient instances from the lib's classes.
+    // Versioned separately from kestraVersion, it has its own release cadence and is absent from the platform BOM.
+    api "io.kestra:kestra-api-client:$kestraApiClientVersion"
 }
 
 
