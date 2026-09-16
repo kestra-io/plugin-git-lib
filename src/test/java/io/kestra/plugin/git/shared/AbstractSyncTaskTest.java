@@ -11,6 +11,10 @@ import java.util.stream.Collectors;
 import org.eclipse.jgit.api.Git;
 import org.junit.jupiter.api.Test;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+
 import io.kestra.core.junit.annotations.KestraTest;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.runners.RunContext;
@@ -111,6 +115,76 @@ class AbstractSyncTaskTest {
         task.run(runContext);
 
         assertThat(deletedResources, empty());
+    }
+
+    /**
+     * Reproduces kestra-io/plugin-git#330: the in-process delete/keep computation was verified correct (see
+     * {@code SyncNamespaceFilesTest}), so the reported no-op is most likely a misconfigured {@code gitDirectory}
+     * that never lines up with the namespace's existing content. Since nothing is flagged as stale in that case,
+     * {@code delete: true} silently no-ops instead of failing loudly — surface it with a warning instead.
+     */
+    @Test
+    void run_warnsWhenDeleteYieldsEmptyDeletionSetOnNonEmptyNamespace() throws Exception {
+        Path remote = newRemoteWithDefaultBranchContent();
+        try (Git git = Git.open(remote.toFile())) {
+            git.branchCreate().setName("feature").call();
+        }
+        RunContext runContext = runContextFactory.of();
+
+        TestSyncTask task = TestSyncTask.builder()
+            .url(Property.ofValue(remote.toUri().toString()))
+            .branch(Property.ofValue("feature"))
+            .delete(Property.ofValue(true))
+            .existingResources(List.of("/file.txt"))
+            .build();
+
+        Logger logbackLogger = (Logger) runContext.logger();
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logbackLogger.addAppender(appender);
+
+        try {
+            task.run(runContext);
+        } finally {
+            logbackLogger.detachAppender(appender);
+        }
+
+        boolean warned = appender.list.stream()
+            .anyMatch(event -> event.getFormattedMessage().contains("delete is true but no resource was deleted")
+                && event.getFormattedMessage().contains("gitDirectory"));
+        assertThat(warned, is(true));
+    }
+
+    /** Nothing existed beforehand, so there is nothing to keep silent about: the warning must stay quiet. */
+    @Test
+    void run_doesNotWarnWhenNamespaceWasAlreadyEmpty() throws Exception {
+        Path remote = newRemoteWithDefaultBranchContent();
+        try (Git git = Git.open(remote.toFile())) {
+            git.branchCreate().setName("feature").call();
+        }
+        RunContext runContext = runContextFactory.of();
+
+        TestSyncTask task = TestSyncTask.builder()
+            .url(Property.ofValue(remote.toUri().toString()))
+            .branch(Property.ofValue("feature"))
+            .delete(Property.ofValue(true))
+            .existingResources(List.of())
+            .build();
+
+        Logger logbackLogger = (Logger) runContext.logger();
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logbackLogger.addAppender(appender);
+
+        try {
+            task.run(runContext);
+        } finally {
+            logbackLogger.detachAppender(appender);
+        }
+
+        boolean warned = appender.list.stream()
+            .anyMatch(event -> event.getFormattedMessage().contains("delete is true but no resource was deleted"));
+        assertThat(warned, is(false));
     }
 
     /**

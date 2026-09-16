@@ -295,6 +295,20 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
 
                     deleted.add(e.getValue());
                 }));
+
+                // If nothing gets flagged for deletion despite an existing, non-empty namespace, delete:true silently
+                // no-ops. The most common cause is 'gitDirectory' not matching the location the namespace content was
+                // originally synced from — surface it instead of letting stale resources linger unnoticed.
+                if (deleted.isEmpty() && !beforeUpdateResourcesByUri.isEmpty()) {
+                    runContext.logger().warn(
+                        "delete is true but no resource was deleted, even though {} resource(s) already exist for namespace '{}'. " +
+                            "If you expected some of them to be removed, verify that 'gitDirectory' ('{}') matches the location " +
+                            "this content was originally synced from.",
+                        beforeUpdateResourcesByUri.size(),
+                        renderedNamespace,
+                        runContext.render(this.getGitDirectory()).as(String.class).orElse(null)
+                    );
+                }
             } else {
                 deleted = null;
             }
