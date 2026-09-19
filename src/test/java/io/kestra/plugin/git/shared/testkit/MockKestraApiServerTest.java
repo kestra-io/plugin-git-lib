@@ -12,7 +12,8 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 
 public class MockKestraApiServerTest {
     private MockKestraApiServer server;
@@ -41,16 +42,8 @@ public class MockKestraApiServerTest {
         HttpResponse<String> resp =
             client.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
 
-        assertEquals(200, resp.statusCode(), "should return 200");
-        assertEquals(
-            "application/json",
-            resp.headers().firstValue("Content-Type").orElse(""),
-            "should return Content-Type application/json"
-        );
-        assertEquals(
-            "{\"id\":\"namespace\"}",
-            resp.body(),
-            "should return requested namespace id"
-        );
+        assertThat(resp.statusCode(), is(200));
+        assertThat(resp.headers().firstValue("Content-Type").orElse(""), is("application/json"));
+        assertThat(resp.body(), is("{\"id\":\"namespace\"}"));
     }
 }
