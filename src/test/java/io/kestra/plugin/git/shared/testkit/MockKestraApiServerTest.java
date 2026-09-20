@@ -31,6 +31,8 @@ public class MockKestraApiServerTest {
 
     @BeforeEach
     void startMockServer() throws IOException {
+        flowRepository.findAllForAllTenants()
+                      .forEach(f -> flowRepository.delete(FlowWithSource.of(f, "")));
         server = MockKestraApiServer.start(flowRepository);
         client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
     }
@@ -136,16 +138,16 @@ public class MockKestraApiServerTest {
     }
 
     @Test
-    void getFlow_shouldReturnRequestedFlowWithSource()  throws IOException, InterruptedException {
+    void getFlow_shouldReturnRequestedFlowWithSource() throws IOException, InterruptedException {
         String src = """
-                                         id: id
-                                         namespace: namespace
+            id: id
+            namespace: namespace
 
-                                         tasks:
-                                           - id: say
-                                             type: io.kestra.plugin.core.log.Log
-                                             message: hello
-                                         """;
+            tasks:
+              - id: say
+                type: io.kestra.plugin.core.log.Log
+                message: hello
+            """;
         String tenantId = "tenant";
         GenericFlow flow = GenericFlow.fromYaml(tenantId, src);
         FlowWithSource repository = flowRepository.create(flow);
@@ -172,5 +174,60 @@ public class MockKestraApiServerTest {
         assertThat(namespace, is("namespace"));
         assertThat(source, is(src));
         assertThat(revision, is(repository.getRevision()));
+    }
+
+    @Test
+    void getFlow_shouldReturnNotFoundForMissingFlow() throws IOException, InterruptedException {
+        String src = """
+            id: id
+            namespace: namespace
+
+            tasks:
+              - id: say
+                type: io.kestra.plugin.core.log.Log
+                message: hello
+            """;
+        String tenantId = "tenant";
+        GenericFlow flow = GenericFlow.fromYaml(tenantId, src);
+        flowRepository.create(flow);
+        String path = "/api/v1/tenant/flows/namespace/di";
+        HttpRequest req = HttpRequest.newBuilder()
+                                     .uri(URI.create(server.url() + path))
+                                     .GET()
+                                     .build();
+
+        HttpResponse<String> resp =
+            client.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+
+        assertThat(resp.statusCode(), is(404));
+        assertThat(resp.body(), is(""));
+    }
+
+    @Test
+    void getFlow_shouldReturnForcedStatusForRequestedFlow() throws IOException, InterruptedException {
+        String src = """
+            id: id
+            namespace: namespace
+
+            tasks:
+              - id: say
+                type: io.kestra.plugin.core.log.Log
+                message: hello
+            """;
+        String tenantId = "tenant";
+        GenericFlow flow = GenericFlow.fromYaml(tenantId, src);
+        flowRepository.create(flow);
+        server.forceGetFlowStatus("namespace", "id", 500);
+        String path = "/api/v1/tenant/flows/namespace/id";
+        HttpRequest req = HttpRequest.newBuilder()
+                                     .uri(URI.create(server.url() + path))
+                                     .GET()
+                                     .build();
+
+        HttpResponse<String> resp =
+            client.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+
+        assertThat(resp.statusCode(), is(500));
+        assertThat(resp.body(), is(""));
     }
 }
