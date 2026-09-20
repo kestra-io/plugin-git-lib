@@ -48,7 +48,7 @@ public class MockKestraApiServerTest {
     }
 
     @Test
-    void postValid_shouldReturnValidationResultWithoutError() throws IOException, InterruptedException {
+    void validateFlows_shouldReturnNoErrorsForValidFlow() throws IOException, InterruptedException {
         String path = "/api/v1/tenant/flows/validate";
         HttpRequest req = HttpRequest.newBuilder()
                                      .uri(URI.create(server.url() + path))
@@ -70,6 +70,32 @@ public class MockKestraApiServerTest {
         assertThat(resp.headers().firstValue("Content-Type").orElse(""), is("application/json"));
         assertThat(resp.body(), is("""
                 [{"index":0,"constraints":null,"flow":null,"namespace":null}]
+                """.strip()));
+    }
+
+    @Test
+    void validateFlows_shouldReturnValidationErrorForInvalidTaskType() throws IOException, InterruptedException {
+        String path = "/api/v1/tenant/flows/validate";
+        HttpRequest req = HttpRequest.newBuilder()
+                                     .uri(URI.create(server.url() + path))
+                                     .POST(HttpRequest.BodyPublishers.ofString("""
+                                         id: id
+                                         namespace: namespace
+
+                                         tasks:
+                                           - id: say
+                                             type: io.kestra.plugin.core.log.Invalid
+                                             message: hello
+                                         """))
+                                     .build();
+
+        HttpResponse<String> resp =
+            client.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+
+        assertThat(resp.statusCode(), is(200));
+        assertThat(resp.headers().firstValue("Content-Type").orElse(""), is("application/json"));
+        assertThat(resp.body(), is("""
+                [{"index":0,"constraints":"Invalid task type: unknown or unregistered plugin","flow":null,"namespace":null}]
                 """.strip()));
     }
 }
