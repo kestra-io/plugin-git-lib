@@ -1,5 +1,12 @@
 package io.kestra.plugin.git.shared.testkit;
 
+import io.kestra.core.junit.annotations.KestraTest;
+import io.kestra.core.models.flows.FlowWithSource;
+import io.kestra.core.models.flows.GenericFlow;
+import io.kestra.core.repositories.FlowRepositoryInterface;
+import com.fasterxml.jackson.databind.JsonNode;
+import io.kestra.core.serializers.JacksonMapper;
+import jakarta.inject.Inject;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,13 +22,16 @@ import java.time.Duration;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
 
+@KestraTest
 public class MockKestraApiServerTest {
     private MockKestraApiServer server;
     private HttpClient client;
+    @Inject
+    private FlowRepositoryInterface flowRepository;
 
     @BeforeEach
     void startMockServer() throws IOException {
-        server = MockKestraApiServer.start(null);
+        server = MockKestraApiServer.start(flowRepository);
         client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
     }
 
@@ -69,8 +79,8 @@ public class MockKestraApiServerTest {
         assertThat(resp.statusCode(), is(200));
         assertThat(resp.headers().firstValue("Content-Type").orElse(""), is("application/json"));
         assertThat(resp.body(), is("""
-                [{"index":0,"constraints":null,"flow":null,"namespace":null}]
-                """.strip()));
+            [{"index":0,"constraints":null,"flow":null,"namespace":null}]
+            """.strip()));
     }
 
     @Test
@@ -95,7 +105,72 @@ public class MockKestraApiServerTest {
         assertThat(resp.statusCode(), is(200));
         assertThat(resp.headers().firstValue("Content-Type").orElse(""), is("application/json"));
         assertThat(resp.body(), is("""
-                [{"index":0,"constraints":"Invalid task type: unknown or unregistered plugin","flow":null,"namespace":null}]
-                """.strip()));
+            [{"index":0,"constraints":"Invalid task type: unknown or unregistered plugin","flow":null,"namespace":null}]
+            """.strip()));
+    }
+
+    @Test
+    void validateFlows_shouldReturnValidationErrorForUnknownTaskType() throws IOException, InterruptedException {
+        String path = "/api/v1/tenant/flows/validate";
+        HttpRequest req = HttpRequest.newBuilder()
+                                     .uri(URI.create(server.url() + path))
+                                     .POST(HttpRequest.BodyPublishers.ofString("""
+                                         id: id
+                                         namespace: namespace
+
+                                         tasks:
+                                           - id: say
+                                             type: unknown.
+                                             message: hello
+                                         """))
+                                     .build();
+
+        HttpResponse<String> resp =
+            client.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+
+        assertThat(resp.statusCode(), is(200));
+        assertThat(resp.headers().firstValue("Content-Type").orElse(""), is("application/json"));
+        assertThat(resp.body(), is("""
+            [{"index":0,"constraints":"Invalid task type: unknown or unregistered plugin","flow":null,"namespace":null}]
+            """.strip()));
+    }
+
+    @Test
+    void getFlow_shouldReturnRequestedFlowWithSource()  throws IOException, InterruptedException {
+        String src = """
+                                         id: id
+                                         namespace: namespace
+
+                                         tasks:
+                                           - id: say
+                                             type: io.kestra.plugin.core.log.Log
+                                             message: hello
+                                         """;
+        String tenantId = "tenant";
+        GenericFlow flow = GenericFlow.fromYaml(tenantId, src);
+        FlowWithSource repository = flowRepository.create(flow);
+        String path = "/api/v1/tenant/flows/namespace/id";
+        HttpRequest req = HttpRequest.newBuilder()
+                                     .uri(URI.create(server.url() + path))
+                                     .GET()
+                                     .build();
+
+        HttpResponse<String> resp =
+            client.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+
+        assertThat(resp.statusCode(), is(200));
+        assertThat(resp.headers().firstValue("Content-Type").orElse(""), is("application/json"));
+
+        var mapper = JacksonMapper.ofJson();
+        JsonNode root = mapper.readTree(resp.body());
+        String id = root.get("id").asText();
+        String namespace = root.get("namespace").asText();
+        String source = root.get("source").asText();
+        int revision = root.get("revision").asInt();
+
+        assertThat(id, is("id"));
+        assertThat(namespace, is("namespace"));
+        assertThat(source, is(src));
+        assertThat(revision, is(repository.getRevision()));
     }
 }
