@@ -230,4 +230,122 @@ public class MockKestraApiServerTest {
         assertThat(resp.statusCode(), is(500));
         assertThat(resp.body(), is(""));
     }
+
+    @Test
+    void importFlows_shouldCreateFlowFromRawYaml() throws IOException, InterruptedException {
+        String src = """
+            id: id
+            namespace: namespace
+
+            tasks:
+              - id: say
+                type: io.kestra.plugin.core.log.Log
+                message: hello
+            """;
+        String path = "/api/v1/tenant/flows/import";
+        HttpRequest req = HttpRequest.newBuilder()
+                                     .uri(URI.create(server.url() + path))
+                                     .POST(HttpRequest.BodyPublishers.ofString(src))
+                                     .build();
+
+        HttpResponse<String> resp =
+            client.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+
+        assertThat(resp.statusCode(), is(200));
+        assertThat(resp.headers().firstValue("Content-Type").orElse(""), is("application/json"));
+        assertThat(resp.body(), is("[]"));
+
+        var match = flowRepository.findByNamespaceWithSource("tenant", "namespace").stream()
+                                  .filter(f -> "id".equals(f.getId()))
+                                  .findFirst();
+
+        assertThat(match.isPresent(), is(true));
+
+        var flow = match.get();
+        assertThat(flow.getSource(), is(src.stripTrailing()));
+    }
+
+    @Test
+    void importFlows_shouldUpdateExistingFlowFromRawYaml() throws IOException, InterruptedException {
+        String src = """
+            id: id
+            namespace: namespace
+
+            tasks:
+              - id: say
+                type: io.kestra.plugin.core.log.Log
+                message: hello
+            """;
+        GenericFlow flow = GenericFlow.fromYaml("tenant", src);
+        flowRepository.create(flow);
+        String path = "/api/v1/tenant/flows/import";
+        String updatedSource = """
+            id: id
+            namespace: namespace
+
+            tasks:
+              - id: say
+                type: io.kestra.plugin.core.log.Log
+                message: update
+            """;
+        HttpRequest req = HttpRequest.newBuilder()
+                                     .uri(URI.create(server.url() + path))
+                                     .POST(HttpRequest.BodyPublishers.ofString(updatedSource))
+                                     .build();
+
+        HttpResponse<String> resp =
+            client.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+
+        assertThat(resp.statusCode(), is(200));
+        assertThat(resp.headers().firstValue("Content-Type").orElse(""), is("application/json"));
+        assertThat(resp.body(), is("[]"));
+
+        var match = flowRepository.findByNamespaceWithSource("tenant", "namespace").stream()
+                                  .filter(f -> "id".equals(f.getId()))
+                                  .findFirst();
+
+        assertThat(match.isPresent(), is(true));
+
+        var updatedFlow = match.get();
+        assertThat(updatedFlow.getSource(), is(updatedSource.stripTrailing()));
+    }
+
+    @Test
+    void importFlows_shouldCreateFlowFromMultipart() throws IOException, InterruptedException {
+        String src = """
+            id: id
+            namespace: namespace
+
+            tasks:
+              - id: say
+                type: io.kestra.plugin.core.log.Log
+                message: hello
+            """;
+        String multipartBody = "--test-boundary\r\n"
+            + "Content-Disposition: form-data; name=\"file\"; filename=\"flow.yml\"\r\n"
+            + "\r\n"
+            + src + "\r\n" + "--test-boundary--\r\n";
+        String path = "/api/v1/tenant/flows/import";
+        HttpRequest req = HttpRequest.newBuilder()
+                                     .uri(URI.create(server.url() + path))
+                                     .header("Content-Type", "multipart/form-data; boundary=test-boundary")
+                                     .POST(HttpRequest.BodyPublishers.ofString(multipartBody))
+                                     .build();
+
+        HttpResponse<String> resp =
+            client.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+
+        assertThat(resp.statusCode(), is(200));
+        assertThat(resp.headers().firstValue("Content-Type").orElse(""), is("application/json"));
+        assertThat(resp.body(), is("[]"));
+
+        var match = flowRepository.findByNamespaceWithSource("tenant", "namespace").stream()
+                                  .filter(f -> "id".equals(f.getId()))
+                                  .findFirst();
+
+        assertThat(match.isPresent(), is(true));
+
+        var flow = match.get();
+        assertThat(flow.getSource(), is(src.stripTrailing()));
+    }
 }
