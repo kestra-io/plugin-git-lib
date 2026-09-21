@@ -28,24 +28,28 @@ public class MockKestraApiServerTest {
     private HttpClient client;
     @Inject
     private FlowRepositoryInterface flowRepository;
+    private static final String TENANT_ID = "mock-kestra-api-server-test";
 
     @BeforeEach
     void startMockServer() throws IOException {
-        flowRepository.findAllForAllTenants()
-                      .forEach(f -> flowRepository.delete(FlowWithSource.of(f, "")));
+        flowRepository.findAllWithSource(TENANT_ID)
+                      .forEach(f -> flowRepository.delete(f));
         server = MockKestraApiServer.start(flowRepository);
         client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
     }
 
     @AfterEach
     void stopMockServer() {
-        client.close();
-        server.close();
+        try {
+            client.close();
+        } finally {
+            server.close();
+        }
     }
 
     @Test
     void getNamespace_shouldReturnRequestedNamespaceId() throws IOException, InterruptedException {
-        String path = "/api/v1/tenant/namespaces/namespace";
+        String path = "/api/v1/" + TENANT_ID + "/namespaces/namespace";
         HttpRequest req = HttpRequest.newBuilder()
                                      .uri(URI.create(server.url() + path))
                                      .GET()
@@ -61,7 +65,7 @@ public class MockKestraApiServerTest {
 
     @Test
     void validateFlows_shouldReturnNoErrorsForValidFlow() throws IOException, InterruptedException {
-        String path = "/api/v1/tenant/flows/validate";
+        String path = "/api/v1/" + TENANT_ID + "/flows/validate";
         HttpRequest req = HttpRequest.newBuilder()
                                      .uri(URI.create(server.url() + path))
                                      .POST(HttpRequest.BodyPublishers.ofString("""
@@ -87,7 +91,7 @@ public class MockKestraApiServerTest {
 
     @Test
     void validateFlows_shouldReturnValidationErrorForInvalidTaskType() throws IOException, InterruptedException {
-        String path = "/api/v1/tenant/flows/validate";
+        String path = "/api/v1/" + TENANT_ID + "/flows/validate";
         HttpRequest req = HttpRequest.newBuilder()
                                      .uri(URI.create(server.url() + path))
                                      .POST(HttpRequest.BodyPublishers.ofString("""
@@ -113,7 +117,7 @@ public class MockKestraApiServerTest {
 
     @Test
     void validateFlows_shouldReturnValidationErrorForUnknownTaskType() throws IOException, InterruptedException {
-        String path = "/api/v1/tenant/flows/validate";
+        String path = "/api/v1/" + TENANT_ID + "/flows/validate";
         HttpRequest req = HttpRequest.newBuilder()
                                      .uri(URI.create(server.url() + path))
                                      .POST(HttpRequest.BodyPublishers.ofString("""
@@ -148,10 +152,9 @@ public class MockKestraApiServerTest {
                 type: io.kestra.plugin.core.log.Log
                 message: hello
             """;
-        String tenantId = "tenant";
-        GenericFlow flow = GenericFlow.fromYaml(tenantId, src);
+        GenericFlow flow = GenericFlow.fromYaml(TENANT_ID, src);
         FlowWithSource repository = flowRepository.create(flow);
-        String path = "/api/v1/tenant/flows/namespace/id";
+        String path = "/api/v1/" + TENANT_ID + "/flows/namespace/id";
         HttpRequest req = HttpRequest.newBuilder()
                                      .uri(URI.create(server.url() + path))
                                      .GET()
@@ -187,10 +190,9 @@ public class MockKestraApiServerTest {
                 type: io.kestra.plugin.core.log.Log
                 message: hello
             """;
-        String tenantId = "tenant";
-        GenericFlow flow = GenericFlow.fromYaml(tenantId, src);
+        GenericFlow flow = GenericFlow.fromYaml(TENANT_ID, src);
         flowRepository.create(flow);
-        String path = "/api/v1/tenant/flows/namespace/di";
+        String path = "/api/v1/" + TENANT_ID + "/flows/namespace/di";
         HttpRequest req = HttpRequest.newBuilder()
                                      .uri(URI.create(server.url() + path))
                                      .GET()
@@ -214,11 +216,10 @@ public class MockKestraApiServerTest {
                 type: io.kestra.plugin.core.log.Log
                 message: hello
             """;
-        String tenantId = "tenant";
-        GenericFlow flow = GenericFlow.fromYaml(tenantId, src);
+        GenericFlow flow = GenericFlow.fromYaml(TENANT_ID, src);
         flowRepository.create(flow);
         server.forceGetFlowStatus("namespace", "id", 500);
-        String path = "/api/v1/tenant/flows/namespace/id";
+        String path = "/api/v1/" + TENANT_ID + "/flows/namespace/id";
         HttpRequest req = HttpRequest.newBuilder()
                                      .uri(URI.create(server.url() + path))
                                      .GET()
@@ -242,7 +243,7 @@ public class MockKestraApiServerTest {
                 type: io.kestra.plugin.core.log.Log
                 message: hello
             """;
-        String path = "/api/v1/tenant/flows/import";
+        String path = "/api/v1/" + TENANT_ID + "/flows/import";
         HttpRequest req = HttpRequest.newBuilder()
                                      .uri(URI.create(server.url() + path))
                                      .POST(HttpRequest.BodyPublishers.ofString(src))
@@ -255,7 +256,7 @@ public class MockKestraApiServerTest {
         assertThat(resp.headers().firstValue("Content-Type").orElse(""), is("application/json"));
         assertThat(resp.body(), is("[]"));
 
-        var match = flowRepository.findByNamespaceWithSource("tenant", "namespace").stream()
+        var match = flowRepository.findByNamespaceWithSource(TENANT_ID, "namespace").stream()
                                   .filter(f -> "id".equals(f.getId()))
                                   .findFirst();
 
@@ -276,9 +277,9 @@ public class MockKestraApiServerTest {
                 type: io.kestra.plugin.core.log.Log
                 message: hello
             """;
-        GenericFlow flow = GenericFlow.fromYaml("tenant", src);
+        GenericFlow flow = GenericFlow.fromYaml(TENANT_ID, src);
         flowRepository.create(flow);
-        String path = "/api/v1/tenant/flows/import";
+        String path = "/api/v1/" + TENANT_ID + "/flows/import";
         String updatedSource = """
             id: id
             namespace: namespace
@@ -300,7 +301,7 @@ public class MockKestraApiServerTest {
         assertThat(resp.headers().firstValue("Content-Type").orElse(""), is("application/json"));
         assertThat(resp.body(), is("[]"));
 
-        var match = flowRepository.findByNamespaceWithSource("tenant", "namespace").stream()
+        var match = flowRepository.findByNamespaceWithSource(TENANT_ID, "namespace").stream()
                                   .filter(f -> "id".equals(f.getId()))
                                   .findFirst();
 
@@ -325,7 +326,7 @@ public class MockKestraApiServerTest {
             + "Content-Disposition: form-data; name=\"file\"; filename=\"flow.yml\"\r\n"
             + "\r\n"
             + src + "\r\n" + "--test-boundary--\r\n";
-        String path = "/api/v1/tenant/flows/import";
+        String path = "/api/v1/" + TENANT_ID + "/flows/import";
         HttpRequest req = HttpRequest.newBuilder()
                                      .uri(URI.create(server.url() + path))
                                      .header("Content-Type", "multipart/form-data; boundary=test-boundary")
@@ -339,7 +340,7 @@ public class MockKestraApiServerTest {
         assertThat(resp.headers().firstValue("Content-Type").orElse(""), is("application/json"));
         assertThat(resp.body(), is("[]"));
 
-        var match = flowRepository.findByNamespaceWithSource("tenant", "namespace").stream()
+        var match = flowRepository.findByNamespaceWithSource(TENANT_ID, "namespace").stream()
                                   .filter(f -> "id".equals(f.getId()))
                                   .findFirst();
 
