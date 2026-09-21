@@ -68,6 +68,21 @@ public abstract class AbstractGitTask extends Task {
     private static final AtomicReference<String> SSL_CONFIGURED_KEY = new AtomicReference<>(null);
     private static final Object SSL_CONFIG_LOCK = new Object();
 
+    // Namespace-first Git layout used by every namespace/tenant sync task: <namespace>/flows, <namespace>/files.
+    private static final String FLOWS_DIR = "flows";
+    private static final String FILES_DIR = "files";
+
+    /**
+     * Whether a namespace known only in Git carries content for a kind whose resolved source is GIT, narrowed
+     * per kind so a namespace whose {@code files/} directory is Git-sourced doesn't get auto-created (or
+     * otherwise pulled into the sync) from a stray {@code flows/} directory that stays Kestra-sourced, and
+     * vice versa.
+     */
+    protected static boolean gitHasContent(Path namespaceRoot, SourceOfTruth flowsSource, SourceOfTruth filesSource) {
+        return (flowsSource == SourceOfTruth.GIT && Files.isDirectory(namespaceRoot.resolve(FLOWS_DIR)))
+            || (filesSource == SourceOfTruth.GIT && Files.isDirectory(namespaceRoot.resolve(FILES_DIR)));
+    }
+
     @Schema(
         title = "Repository URL",
         description = "HTTP(S) or SSH URI used for clone and push operations."
