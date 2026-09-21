@@ -349,4 +349,84 @@ public class MockKestraApiServerTest {
         var flow = match.get();
         assertThat(flow.getSource(), is(src.stripTrailing()));
     }
+
+    @Test
+    void deleteFlow_shouldDeleteRequestedFlowAndPreserveOtherFlow() throws IOException, InterruptedException {
+        String src = """
+            id: to-keep
+            namespace: namespace
+
+            tasks:
+              - id: say
+                type: io.kestra.plugin.core.log.Log
+                message: hello
+            """;
+        GenericFlow flow = GenericFlow.fromYaml(TENANT_ID, src);
+        flowRepository.create(flow);
+        String path = "/api/v1/" + TENANT_ID + "/flows/namespace/to-delete";
+        String sourceToDelete = """
+            id: to-delete
+            namespace: namespace
+
+            tasks:
+              - id: say
+                type: io.kestra.plugin.core.log.Log
+                message: hello
+            """;
+        GenericFlow flow2 = GenericFlow.fromYaml(TENANT_ID, sourceToDelete);
+        flowRepository.create(flow2);
+        HttpRequest req = HttpRequest.newBuilder()
+                                     .uri(URI.create(server.url() + path))
+                                     .DELETE()
+                                     .build();
+
+        HttpResponse<String> resp =
+            client.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+
+        assertThat(resp.statusCode(), is(200));
+        assertThat(resp.body(), is(""));
+
+        var match = flowRepository.findByNamespaceWithSource(TENANT_ID, "namespace").stream()
+                                  .filter(f -> "to-keep".equals(f.getId()))
+                                  .findFirst();
+
+        var match2 = flowRepository.findByNamespaceWithSource(TENANT_ID, "namespace").stream()
+                                   .filter(f -> "to-delete".equals(f.getId()))
+                                   .findFirst();
+
+        assertThat(match.isPresent(), is(true));
+        assertThat(match2.isPresent(), is(false));
+    }
+
+    @Test
+    void deleteFlow_shouldReturnSuccessForMissingFlow() throws IOException, InterruptedException {
+        String src = """
+            id: to-keep
+            namespace: namespace
+
+            tasks:
+              - id: say
+                type: io.kestra.plugin.core.log.Log
+                message: hello
+            """;
+        GenericFlow flow = GenericFlow.fromYaml(TENANT_ID, src);
+        flowRepository.create(flow);
+        String path = "/api/v1/" + TENANT_ID + "/flows/namespace/to-delete";
+        HttpRequest req = HttpRequest.newBuilder()
+                                     .uri(URI.create(server.url() + path))
+                                     .DELETE()
+                                     .build();
+
+        HttpResponse<String> resp =
+            client.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+
+        assertThat(resp.statusCode(), is(200));
+        assertThat(resp.body(), is(""));
+
+        var match = flowRepository.findByNamespaceWithSource(TENANT_ID, "namespace").stream()
+                                  .filter(f -> "to-keep".equals(f.getId()))
+                                  .findFirst();
+
+        assertThat(match.isPresent(), is(true));
+    }
 }
