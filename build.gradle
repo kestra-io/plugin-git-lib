@@ -100,8 +100,8 @@ dependencies {
     testFixturesCompileOnly group: "io.kestra", name: "tests", version: kestraVersion
     testFixturesCompileOnly "io.micronaut:micronaut-context"
     testFixturesImplementation "io.micronaut.test:micronaut-test-junit5"
-    testFixturesImplementation "org.testcontainers:testcontainers:1.21.4"
-    testFixturesImplementation "org.testcontainers:junit-jupiter:1.21.4"
+    testFixturesImplementation "org.testcontainers:testcontainers:2.0.5"
+    testFixturesImplementation "org.testcontainers:testcontainers-junit-jupiter:2.0.5"
     testFixturesImplementation "org.junit.jupiter:junit-jupiter-api"
 
     // test
@@ -143,7 +143,7 @@ jacocoTestReport {
 // they resolve the test-fixtures artifact and its dependencies through the published Gradle module metadata, which
 // this does not touch. Stripping them from the POM only keeps non-Gradle/POM-scanning consumers from seeing
 // test-only dependencies listed against the main artifact.
-def testOnlyPomArtifacts = ['micronaut-test-junit5', 'testcontainers', 'junit-jupiter', 'junit-jupiter-api']
+def testOnlyPomArtifacts = ['micronaut-test-junit5', 'testcontainers', 'testcontainers-junit-jupiter', 'junit-jupiter-api']
 publishing {
     publications.withType(MavenPublication).configureEach {
         pom.withXml {
