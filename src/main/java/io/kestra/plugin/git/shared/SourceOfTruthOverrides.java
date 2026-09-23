@@ -53,4 +53,31 @@ public class SourceOfTruthOverrides {
         }
         return runContext.render(override).as(SourceOfTruth.class).orElse(fallback);
     }
+
+    /**
+     * Resolves both {@code flows} and {@code namespaceFiles} against {@code fallback} in one call, along with the
+     * derived {@code anyGit}/{@code anyKestra}/{@code mixed} flags every namespace/tenant sync task needs.
+     */
+    public static Resolved resolveAll(
+        RunContext runContext,
+        @Nullable Property<SourceOfTruth> flowsOverride,
+        @Nullable Property<SourceOfTruth> namespaceFilesOverride,
+        SourceOfTruth fallback) throws IllegalVariableEvaluationException {
+        SourceOfTruth flows = resolve(runContext, flowsOverride, fallback);
+        SourceOfTruth namespaceFiles = resolve(runContext, namespaceFilesOverride, fallback);
+        return new Resolved(
+            flows,
+            namespaceFiles,
+            flows == SourceOfTruth.GIT || namespaceFiles == SourceOfTruth.GIT,
+            flows == SourceOfTruth.KESTRA || namespaceFiles == SourceOfTruth.KESTRA,
+            flows != namespaceFiles
+        );
+    }
+
+    /**
+     * The per-kind resolved sources returned by {@link #resolveAll}, plus the {@code anyGit}/{@code anyKestra}/
+     * {@code mixed} flags derived from them.
+     */
+    public record Resolved(SourceOfTruth flows, SourceOfTruth namespaceFiles, boolean anyGit, boolean anyKestra, boolean mixed) {
+    }
 }
