@@ -134,7 +134,7 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
 
             return filtered.collect(
                 Collectors.toMap(
-                    gitPath -> URI.create(("/" + baseDirectory.relativize(gitPath) + (gitPath.toFile().isDirectory() ? "/" : "")).replace("\\", "/")),
+                    gitPath -> toGitUri(("/" + baseDirectory.relativize(gitPath) + (gitPath.toFile().isDirectory() ? "/" : "")).replace("\\", "/")),
                     throwFunction(path -> throwSupplier(() ->
                     {
                         if (Files.isDirectory(path)) {
@@ -145,6 +145,24 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
                 )
             );
         }
+    }
+
+    private static URI toGitUri(String path) {
+        try {
+            return new URI(null, null, path, null);
+        } catch (URISyntaxException e) {
+            throw new IllegalArgumentException("Unable to build a URI for git path '" + path + "': " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Builds the git path reported in the diff from a resource URI produced by {@link #gitResourcesContentByUri}.
+     *
+     * <p>Uses {@link URI#getPath()} rather than {@link URI#toString()} so that characters percent-encoded in the URI
+     * (spaces, {@code #}, {@code %}, ...) are reported as they are on disk.
+     */
+    protected static String gitPath(String renderedGitDirectory, URI resourceUri) {
+        return renderedGitDirectory + resourceUri.getPath();
     }
 
     protected Property<Boolean> traverseDirectories() {

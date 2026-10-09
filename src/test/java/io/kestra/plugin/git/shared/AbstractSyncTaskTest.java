@@ -15,6 +15,7 @@ import io.kestra.core.junit.annotations.KestraTest;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextFactory;
+import io.kestra.core.utils.IdUtils;
 import io.kestra.plugin.git.shared.TestTasks.TestSyncTask;
 
 import jakarta.inject.Inject;
@@ -24,6 +25,7 @@ import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.notNullValue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @KestraTest
@@ -227,5 +229,65 @@ class AbstractSyncTaskTest {
             .collect(Collectors.toSet());
 
         assertThat(uris, not(hasItem("/link/linked.txt")));
+    }
+
+    @Test
+    void gitResourcesContentByUri_encodesSpecialCharactersAndKeepsDecodedPath() throws Exception {
+        Path baseDirectory = Files.createTempDirectory("sync-task-special-chars-");
+        Files.createDirectories(baseDirectory.resolve("tasks"));
+        Files.createDirectories(baseDirectory.resolve("dir with space"));
+        Files.writeString(baseDirectory.resolve("tasks").resolve("merge_one copy.yml"), "id: a\n");
+        Files.writeString(baseDirectory.resolve("dir with space").resolve("inner.txt"), "x\n");
+        Files.writeString(baseDirectory.resolve("100%.txt"), "x\n");
+        Files.writeString(baseDirectory.resolve("a#b[1].txt"), "x\n");
+
+        var task = TestSyncTask.builder().build();
+        RunContext runContext = runContextFactory.of();
+
+        Set<URI> uris = task.gitResourcesContentByUri(baseDirectory, runContext).keySet();
+        Set<String> paths = uris.stream().map(URI::getPath).collect(Collectors.toSet());
+
+        assertThat(paths, hasItem("/tasks/merge_one copy.yml"));
+        assertThat(paths, hasItem("/dir with space/"));
+        assertThat(paths, hasItem("/dir with space/inner.txt"));
+        assertThat(paths, hasItem("/100%.txt"));
+        assertThat(paths, hasItem("/a#b[1].txt"));
+
+        var strings = uris.stream().map(URI::toString).collect(Collectors.toSet());
+        assertThat(strings, hasItem("/100%25.txt"));
+        assertThat(strings, hasItem("/dir%20with%20space/"));
+    }
+
+    @Test
+    void run_syncsRepositoryContainingFileNamesWithSpecialCharacters() throws Exception {
+        Path remote = Files.createTempDirectory("sync-task-remote-special-");
+        try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
+            Files.createDirectories(remote.resolve("tasks"));
+            Files.writeString(remote.resolve("tasks").resolve("merge_one copy.yml"), "id: a\n");
+            Files.writeString(remote.resolve("a#b[1].txt"), "x\n");
+            git.add().addFilepattern(".").call();
+            git.commit().setMessage("init").call();
+            git.branchCreate().setName("main").call();
+        }
+
+        for (var dryRun : List.of(false, true)) {
+            var task = TestSyncTask.builder()
+                .id("sync-" + IdUtils.create())
+                .url(Property.ofValue(remote.toUri().toString()))
+                .dryRun(Property.ofValue(dryRun))
+                .build();
+
+            var output = task.run(runContextFactory.of());
+
+            assertThat(output.diffFileUri(), notNullValue());
+        }
+    }
+
+    @Test
+    void gitPath_returnsDecodedPath() throws Exception {
+        var encoded = new URI(null, null, "/tasks/merge_one copy.yml", null);
+        assertThat(encoded.toString(), is("/tasks/merge_one%20copy.yml"));
+        assertThat(TestSyncTask.gitPath("_files", encoded), is("_files/tasks/merge_one copy.yml"));
+        assertThat(TestSyncTask.gitPath("_files", URI.create("/tasks/plain.yml")), is("_files/tasks/plain.yml"));
     }
 }
