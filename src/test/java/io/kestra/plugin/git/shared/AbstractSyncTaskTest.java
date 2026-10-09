@@ -4,6 +4,7 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
@@ -272,7 +273,7 @@ class AbstractSyncTaskTest {
         Set<URI> uris = task.gitResourcesContentByUri(baseDirectory, runContextFactory.of()).keySet();
 
         assertThat(uris.stream().map(URI::getPath).collect(Collectors.toSet()), containsInAnyOrder("/a%20b.txt", "/what?.txt"));
-        assertThat(uris.stream().map(URI::getQuery).filter(java.util.Objects::nonNull).toList(), empty());
+        assertThat(uris.stream().map(URI::getQuery).filter(Objects::nonNull).toList(), empty());
     }
 
     @Test
