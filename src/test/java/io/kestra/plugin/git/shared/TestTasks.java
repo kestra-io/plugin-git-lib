@@ -217,6 +217,10 @@ public final class TestTasks {
         @Builder.Default
         private List<String> deletedResources = new CopyOnWriteArrayList<>();
 
+        /** Records the decoded path of every resource the sync writes (or simulates writing). */
+        @Builder.Default
+        private List<String> writtenPaths = new CopyOnWriteArrayList<>();
+
         @Override
         public Property<String> getBranch() {
             return branch;
@@ -244,11 +248,13 @@ public final class TestTasks {
 
         @Override
         protected String simulateResourceWrite(RunContext runContext, String renderedNamespace, URI uri, InputStream inputStream) {
+            writtenPaths.add(uri.getPath());
             return uri.toString();
         }
 
         @Override
         protected String writeResource(RunContext runContext, String renderedNamespace, URI uri, InputStream inputStream) {
+            writtenPaths.add(uri.getPath());
             return uri.toString();
         }
 

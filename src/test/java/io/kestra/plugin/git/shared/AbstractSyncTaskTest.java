@@ -21,7 +21,10 @@ import io.kestra.plugin.git.shared.TestTasks.TestSyncTask;
 import jakarta.inject.Inject;
 
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.empty;
+import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
@@ -258,6 +261,20 @@ class AbstractSyncTaskTest {
         assertThat(strings, hasItem("/dir%20with%20space/"));
     }
 
+    /** Literal percent-sequences and `?` in names are preserved verbatim (previously decoded / parsed as a query). */
+    @Test
+    void gitResourcesContentByUri_keepsLiteralPercentSequencesAndQueryCharacters() throws Exception {
+        Path baseDirectory = Files.createTempDirectory("sync-task-literal-chars-");
+        Files.writeString(baseDirectory.resolve("a%20b.txt"), "x\n");
+        Files.writeString(baseDirectory.resolve("what?.txt"), "x\n");
+
+        var task = TestSyncTask.builder().build();
+        Set<URI> uris = task.gitResourcesContentByUri(baseDirectory, runContextFactory.of()).keySet();
+
+        assertThat(uris.stream().map(URI::getPath).collect(Collectors.toSet()), containsInAnyOrder("/a%20b.txt", "/what?.txt"));
+        assertThat(uris.stream().map(URI::getQuery).filter(java.util.Objects::nonNull).toList(), empty());
+    }
+
     @Test
     void run_syncsRepositoryContainingFileNamesWithSpecialCharacters() throws Exception {
         Path remote = Files.createTempDirectory("sync-task-remote-special-");
@@ -275,11 +292,20 @@ class AbstractSyncTaskTest {
                 .id("sync-" + IdUtils.create())
                 .url(Property.ofValue(remote.toUri().toString()))
                 .dryRun(Property.ofValue(dryRun))
+                .delete(Property.ofValue(true))
+                // "/gone%20file.txt" was synced earlier and removed from git; "/a%23b%5B1%5D.txt" is still in git.
+                .existingResources(List.of("/gone%20file.txt", "/a%23b%5B1%5D.txt"))
                 .build();
 
             var output = task.run(runContextFactory.of());
 
             assertThat(output.diffFileUri(), notNullValue());
+            assertThat(task.getWrittenPaths(), hasItems("/tasks/merge_one copy.yml", "/a#b[1].txt"));
+            if (dryRun) {
+                assertThat(task.getDeletedResources(), empty());
+            } else {
+                assertThat(task.getDeletedResources(), contains("/gone%20file.txt"));
+            }
         }
     }
 
