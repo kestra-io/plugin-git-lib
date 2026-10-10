@@ -22,6 +22,7 @@ import org.slf4j.Logger;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.runners.RunContext;
 import io.kestra.plugin.git.shared.AbstractGitTask;
+import io.kestra.plugin.git.shared.JGitShutdownGuard;
 
 import lombok.Builder;
 
@@ -62,6 +63,8 @@ public final class CloneService {
      * non-empty (e.g. populated by a preceding {@code WorkingDirectory} task's input files).
      */
     public static CloneResult clone(RunContext runContext, AbstractGitTask gitTask, CloneRequest request) throws Exception {
+        JGitShutdownGuard.install();
+
         Logger logger = runContext.logger();
         boolean hasCommit = request.commit() != null;
         boolean hasTag = request.tag() != null;
@@ -137,6 +140,7 @@ public final class CloneService {
      */
     private static CloneResult initFetchCheckout(RunContext runContext, AbstractGitTask gitTask, Logger logger, CloneRequest request, boolean hasCommit, boolean hasTag) throws Exception {
         try (var git = Git.init().setDirectory(request.path().toFile()).call()) {
+            JGitShutdownGuard.clearStaleIndexLock(git.getRepository(), logger);
             git.remoteAdd()
                 .setName("origin")
                 .setUri(new URIish(request.url()))

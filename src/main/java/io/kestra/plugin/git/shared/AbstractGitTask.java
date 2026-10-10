@@ -61,6 +61,11 @@ import io.kestra.core.models.annotations.PluginProperty;
 @NoArgsConstructor
 @Getter
 public abstract class AbstractGitTask extends Task {
+
+    static {
+        JGitShutdownGuard.install();
+    }
+
     private static final Pattern PEBBLE_TEMPLATE_PATTERN = Pattern.compile("^\\s*\\{\\{");
 
     // Replaces the boolean flag with a configuration key to allow reconfiguration when the PEM changes.
