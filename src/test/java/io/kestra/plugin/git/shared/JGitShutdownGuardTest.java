@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.jgit.api.Git;
@@ -18,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 class JGitShutdownGuardTest {
     @Test
@@ -67,15 +69,34 @@ class JGitShutdownGuardTest {
             "with the guard installed no shutdown hook is registered, so an in-flight operation keeps its lock");
     }
 
+    /**
+     * Launches the child through a java argument file rather than a long command line, so the test also
+     * works where the command line is limited, and kills it if it stops making progress.
+     */
     private static boolean runChildHoldingIndexLock(Path workDir, boolean guarded) throws Exception {
-        String javaBin = Path.of(System.getProperty("java.home"), "bin", "java").toString();
-        Process child = new ProcessBuilder(javaBin, "-cp", System.getProperty("java.class.path"),
-            IndexLockHolder.class.getName(), workDir.toString(), Boolean.toString(guarded))
-            .redirectErrorStream(true)
-            .start();
-        String output = new String(child.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        assertEquals(0, child.waitFor(2, TimeUnit.MINUTES) ? child.exitValue() : -1, "child JVM failed: " + output);
-        return Files.exists(workDir.resolve(Constants.DOT_GIT).resolve("index" + Constants.LOCK_SUFFIX));
+        Path argFile = Files.createTempFile("jgit-shutdown-guard-child-", ".options");
+        try {
+            String classPath = System.getProperty("java.class.path").replace('\\', '/');
+            Files.write(argFile, List.of(
+                "-cp",
+                "\"" + classPath + "\"",
+                IndexLockHolder.class.getName(),
+                workDir.toAbsolutePath().toString().replace('\\', '/'),
+                Boolean.toString(guarded)));
+            String javaBinary = Path.of(System.getProperty("java.home"), "bin", "java").toString();
+            Process child = new ProcessBuilder(javaBinary, "@" + argFile.toAbsolutePath())
+                .redirectErrorStream(true)
+                .start();
+            String output = new String(child.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            if (!child.waitFor(2, TimeUnit.MINUTES)) {
+                child.destroyForcibly().waitFor(10, TimeUnit.SECONDS);
+                fail("the child JVM never finished: " + output);
+            }
+            assertEquals(0, child.exitValue(), "the child JVM failed: " + output);
+            return Files.exists(workDir.resolve(Constants.DOT_GIT).resolve("index" + Constants.LOCK_SUFFIX));
+        } finally {
+            Files.deleteIfExists(argFile);
+        }
     }
 
     /** Opens a repository, locks its index and exits without unlocking, exactly like a task caught by a SIGTERM. */

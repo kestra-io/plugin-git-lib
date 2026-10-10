@@ -2,6 +2,8 @@ package io.kestra.plugin.git.shared.services;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.util.concurrent.TimeUnit;
 
 import org.eclipse.jgit.api.Git;
 import org.junit.jupiter.api.Test;
@@ -102,6 +104,39 @@ class CloneServiceTest {
         Path repoPath = Path.of(result.directory());
         assertThat(Files.readString(repoPath.resolve("pre-existing.txt")), is("I was here first\n"));
         assertThat(Files.readString(repoPath.resolve("repo-file.txt")), is("from repo\n"));
+    }
+
+    @Test
+    void recoversANonEmptyDirectoryLeftWithAStaleIndexLockByAKilledRun() throws Exception {
+        Path remote = Files.createTempDirectory("clone-service-remote-");
+        try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
+            Files.writeString(remote.resolve("repo-file.txt"), "from repo\n");
+            git.add().addFilepattern("repo-file.txt").call();
+            git.commit().setMessage("initial").call();
+        }
+
+        RunContext runContext = runContextFactory.of();
+        Path workingDir = runContext.workingDir().path();
+        TestCloningTask gitTask = TestCloningTask.builder().build();
+
+        CloneService.clone(runContext, gitTask, CloneService.CloneRequest.builder()
+            .url(remote.toUri().toString())
+            .path(workingDir)
+            .cloneAllBranches(true)
+            .build());
+
+        Path staleLock = workingDir.resolve(".git").resolve("index.lock");
+        Files.writeString(staleLock, "left by a run killed mid checkout");
+        Files.setLastModifiedTime(staleLock, FileTime.fromMillis(System.currentTimeMillis() - TimeUnit.HOURS.toMillis(1)));
+
+        var result = CloneService.clone(runContext, gitTask, CloneService.CloneRequest.builder()
+            .url(remote.toUri().toString())
+            .path(workingDir)
+            .cloneAllBranches(true)
+            .build());
+
+        assertThat(Files.exists(Path.of(result.directory()).resolve("repo-file.txt")), is(true));
+        assertThat(Files.exists(staleLock), is(false));
     }
 
     @Test
