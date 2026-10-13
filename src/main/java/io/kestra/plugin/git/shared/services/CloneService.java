@@ -122,9 +122,9 @@ public final class CloneService {
 
     private static void postCloneCheckout(RunContext runContext, AbstractGitTask gitTask, Git git, Logger logger, CloneRequest request, boolean hasCommit, boolean hasTag) throws Exception {
         if (hasCommit) {
-            checkoutCommit(git, request.commit(), logger, request.noTags());
+            checkoutCommit(runContext, gitTask, git, request.commit(), logger, request.noTags());
         } else if (hasTag) {
-            checkoutTag(git, request.tag(), logger, request.noTags());
+            checkoutTag(runContext, gitTask, git, request.tag(), logger, request.noTags());
         } else if (request.branch() != null) {
             checkoutBranch(git, request.branch(), logger);
         }
@@ -172,9 +172,9 @@ public final class CloneService {
             gitTask.authentified(fetchCommand, runContext).call();
 
             if (hasCommit) {
-                checkoutCommit(git, request.commit(), logger, request.noTags());
+                checkoutCommit(runContext, gitTask, git, request.commit(), logger, request.noTags());
             } else if (hasTag) {
-                checkoutTag(git, request.tag(), logger, request.noTags());
+                checkoutTag(runContext, gitTask, git, request.tag(), logger, request.noTags());
             } else {
                 // Resolve the target branch; fall back to detecting the remote HEAD default branch
                 var targetBranch = request.branch();
@@ -218,7 +218,7 @@ public final class CloneService {
         }
     }
 
-    public static void checkoutCommit(Git git, String sha, Logger logger, boolean noTags) throws Exception {
+    public static void checkoutCommit(RunContext runContext, AbstractGitTask gitTask, Git git, String sha, Logger logger, boolean noTags) throws Exception {
         // Ensure we have a full history in case the repo was shallow by default on the remote
         // or if the requested SHA is deep in history.
         try {
@@ -230,6 +230,9 @@ public final class CloneService {
             var fetch = git.fetch().setRefSpecs(refSpecs);
             if (noTags) {
                 fetch.setTagOpt(TagOpt.NO_TAGS);
+            }
+            if (gitTask != null && runContext != null) {
+                fetch = gitTask.authentified(fetch, runContext);
             }
 
             fetch.call();
@@ -250,11 +253,22 @@ public final class CloneService {
         }
     }
 
-    public static void checkoutTag(Git git, String rTagName, Logger logger, boolean noTags) throws Exception {
+    public static void checkoutCommit(Git git, String sha, Logger logger, boolean noTags) throws Exception {
+        checkoutCommit(null, null, git, sha, logger, noTags);
+    }
+
+    public static void checkoutTag(RunContext runContext, AbstractGitTask gitTask, Git git, String rTagName, Logger logger, boolean noTags) throws Exception {
         if (!noTags) {
-            git.fetch()
-                .setRefSpecs(new RefSpec("+refs/tags/*:refs/tags/*"))
-                .call();
+            try {
+                var fetch = git.fetch()
+                    .setRefSpecs(new RefSpec("+refs/tags/*:refs/tags/*"));
+                if (gitTask != null && runContext != null) {
+                    fetch = gitTask.authentified(fetch, runContext);
+                }
+                fetch.call();
+            } catch (Exception fetchEx) {
+                logger.warn("Fetch before tag checkout failed: {}", fetchEx.getMessage());
+            }
         }
 
         Ref tagRef = git.getRepository().findRef("refs/tags/" + rTagName);
@@ -278,6 +292,10 @@ public final class CloneService {
         git.checkout().setName(commitId.name()).call();
 
         logger.info("Checked out tag {} at commit {}", rTagName, commitId.name());
+    }
+
+    public static void checkoutTag(Git git, String rTagName, Logger logger, boolean noTags) throws Exception {
+        checkoutTag(null, null, git, rTagName, logger, noTags);
     }
 
     public static void checkoutBranch(Git git, String branch, Logger logger) throws Exception {

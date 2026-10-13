@@ -10,6 +10,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import io.kestra.core.junit.annotations.KestraTest;
+import io.kestra.core.models.property.Property;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextFactory;
 import io.kestra.plugin.git.shared.TestTasks.TestCloningTask;
@@ -179,5 +180,116 @@ class CloneServiceTest {
             .count();
 
         assertThat(startCloningLogCount, is(1L));
+    }
+
+    @Test
+    void clonesAtASpecificTag() throws Exception {
+        Path remote = Files.createTempDirectory("clone-service-remote-tag-");
+        try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
+            Files.writeString(remote.resolve("file1.txt"), "first\n");
+            git.add().addFilepattern("file1.txt").call();
+            var commit1 = git.commit().setMessage("first").call();
+            git.tag().setName("v1.0.0").setObjectId(commit1).call();
+
+            Files.writeString(remote.resolve("file2.txt"), "second\n");
+            git.add().addFilepattern("file2.txt").call();
+            git.commit().setMessage("second").call();
+        }
+
+        RunContext runContext = runContextFactory.of();
+        TestCloningTask gitTask = TestCloningTask.builder().build();
+
+        var result = CloneService.clone(runContext, gitTask, CloneService.CloneRequest.builder()
+            .url(remote.toUri().toString())
+            .path(runContext.workingDir().path())
+            .tag("v1.0.0")
+            .cloneAllBranches(true)
+            .build());
+
+        Path repoPath = Path.of(result.directory());
+        assertThat(Files.exists(repoPath.resolve("file1.txt")), is(true));
+        assertThat(Files.exists(repoPath.resolve("file2.txt")), is(false));
+    }
+
+    @Test
+    void clonesAtAnAnnotatedTag() throws Exception {
+        Path remote = Files.createTempDirectory("clone-service-remote-annotated-tag-");
+        try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
+            Files.writeString(remote.resolve("file1.txt"), "first\n");
+            git.add().addFilepattern("file1.txt").call();
+            git.commit().setMessage("first").call();
+
+            Files.writeString(remote.resolve("file2.txt"), "second\n");
+            git.add().addFilepattern("file2.txt").call();
+            git.commit().setMessage("second").call();
+            git.tag().setName("v2.0.0").setAnnotated(true).setMessage("release v2").call();
+        }
+
+        RunContext runContext = runContextFactory.of();
+        TestCloningTask gitTask = TestCloningTask.builder().build();
+
+        var result = CloneService.clone(runContext, gitTask, CloneService.CloneRequest.builder()
+            .url(remote.toUri().toString())
+            .path(runContext.workingDir().path())
+            .tag("v2.0.0")
+            .cloneAllBranches(true)
+            .build());
+
+        Path repoPath = Path.of(result.directory());
+        assertThat(Files.exists(repoPath.resolve("file1.txt")), is(true));
+        assertThat(Files.exists(repoPath.resolve("file2.txt")), is(true));
+    }
+
+    @Test
+    void clonesWithCredentialsDoesNotWarnOnFetch() throws Exception {
+        Path remote = Files.createTempDirectory("clone-service-remote-auth-");
+        try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
+            Files.writeString(remote.resolve("file.txt"), "hello\n");
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("init").call();
+            git.tag().setName("v1.0.0").call();
+        }
+
+        RunContext runContext = runContextFactory.of();
+        TestCloningTask gitTask = TestCloningTask.builder()
+            .username(Property.ofValue("user"))
+            .password(Property.ofValue("token"))
+            .build();
+
+        Logger logbackLogger = (Logger) runContext.logger();
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logbackLogger.addAppender(appender);
+
+        try {
+            CloneService.clone(runContext, gitTask, CloneService.CloneRequest.builder()
+                .url(remote.toUri().toString())
+                .path(runContext.workingDir().path())
+                .tag("v1.0.0")
+                .cloneAllBranches(true)
+                .build());
+        } finally {
+            logbackLogger.detachAppender(appender);
+        }
+
+        boolean hasCredentialsWarning = appender.list.stream()
+            .anyMatch(event -> event.getFormattedMessage().contains("no CredentialsProvider has been registered"));
+
+        assertThat(hasCredentialsWarning, is(false));
+    }
+
+    @Test
+    void backwardCompatibilityCheckoutMethodsSucceed() throws Exception {
+        Path remote = Files.createTempDirectory("clone-service-legacy-");
+        try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
+            Files.writeString(remote.resolve("file.txt"), "hello\n");
+            git.add().addFilepattern("file.txt").call();
+            var commit = git.commit().setMessage("init").call();
+            git.tag().setName("v1.0.0").call();
+
+            // Invoke legacy 4-parameter checkout methods directly
+            CloneService.checkoutTag(git, "v1.0.0", runContextFactory.of().logger(), false);
+            CloneService.checkoutCommit(git, commit.name(), runContextFactory.of().logger(), false);
+        }
     }
 }
