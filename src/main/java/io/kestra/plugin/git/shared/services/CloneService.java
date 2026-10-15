@@ -221,6 +221,7 @@ public final class CloneService {
     public static void checkoutCommit(RunContext runContext, AbstractGitTask gitTask, Git git, String sha, Logger logger, boolean noTags) throws Exception {
         // Ensure we have a full history in case the repo was shallow by default on the remote
         // or if the requested SHA is deep in history.
+        Exception fetchEx = null;
         try {
             var refSpecs = new ArrayList<>(List.of(new RefSpec("+refs/heads/*:refs/remotes/origin/*")));
             if (!noTags) {
@@ -236,43 +237,63 @@ public final class CloneService {
             }
 
             fetch.call();
-        } catch (Exception fetchEx) {
-            logger.warn("Fetch before checkout failed: {}", fetchEx.getMessage());
+        } catch (Exception e) {
+            fetchEx = e;
+            logger.warn("Fetch before checkout failed: {}", e.getMessage());
         }
 
         ObjectId target;
         try {
             target = git.getRepository().resolve(sha);
             if (target == null) {
+                if (fetchEx != null) {
+                    throw fetchEx;
+                }
                 throw new IllegalArgumentException("Cannot resolve commit SHA: " + sha);
             }
             git.checkout().setName(target.name()).call();
             logger.info("Checked out commit {} (detached HEAD)", target.name());
         } catch (Exception e) {
+            if (fetchEx != null && e != fetchEx) {
+                e.addSuppressed(fetchEx);
+            }
+            if (e == fetchEx) {
+                throw e;
+            }
             throw new IllegalStateException("Failed to checkout commit " + sha + ": " + e.getMessage(), e);
         }
     }
 
+    /**
+     * @deprecated Use {@link #checkoutCommit(RunContext, AbstractGitTask, Git, String, Logger, boolean)} to ensure
+     * fetch operations are properly authenticated against private repositories.
+     */
+    @Deprecated
     public static void checkoutCommit(Git git, String sha, Logger logger, boolean noTags) throws Exception {
         checkoutCommit(null, null, git, sha, logger, noTags);
     }
 
     public static void checkoutTag(RunContext runContext, AbstractGitTask gitTask, Git git, String rTagName, Logger logger, boolean noTags) throws Exception {
-        if (!noTags) {
-            try {
-                var fetch = git.fetch()
-                    .setRefSpecs(new RefSpec("+refs/tags/*:refs/tags/*"));
-                if (gitTask != null && runContext != null) {
-                    fetch = gitTask.authentified(fetch, runContext);
-                }
-                fetch.call();
-            } catch (Exception fetchEx) {
-                logger.warn("Fetch before tag checkout failed: {}", fetchEx.getMessage());
+        Exception fetchEx = null;
+        try {
+            RefSpec refSpec = noTags
+                ? new RefSpec("+refs/tags/" + rTagName + ":refs/tags/" + rTagName)
+                : new RefSpec("+refs/tags/*:refs/tags/*");
+            var fetch = git.fetch().setRefSpecs(refSpec);
+            if (gitTask != null && runContext != null) {
+                fetch = gitTask.authentified(fetch, runContext);
             }
+            fetch.call();
+        } catch (Exception e) {
+            fetchEx = e;
+            logger.warn("Fetch before tag checkout failed: {}", e.getMessage());
         }
 
         Ref tagRef = git.getRepository().findRef("refs/tags/" + rTagName);
         if (tagRef == null) {
+            if (fetchEx != null) {
+                throw fetchEx;
+            }
             throw new IllegalArgumentException("Cannot resolve tag: " + rTagName);
         }
 
@@ -294,6 +315,11 @@ public final class CloneService {
         logger.info("Checked out tag {} at commit {}", rTagName, commitId.name());
     }
 
+    /**
+     * @deprecated Use {@link #checkoutTag(RunContext, AbstractGitTask, Git, String, Logger, boolean)} to ensure
+     * fetch operations are properly authenticated against private repositories.
+     */
+    @Deprecated
     public static void checkoutTag(Git git, String rTagName, Logger logger, boolean noTags) throws Exception {
         checkoutTag(null, null, git, rTagName, logger, noTags);
     }

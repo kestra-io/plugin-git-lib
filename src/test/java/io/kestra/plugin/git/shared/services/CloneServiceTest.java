@@ -15,12 +15,35 @@ import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextFactory;
 import io.kestra.plugin.git.shared.TestTasks.TestCloningTask;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import java.util.EnumSet;
+
 import jakarta.inject.Inject;
+import jakarta.servlet.DispatcherType;
+import jakarta.servlet.Filter;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.ServletRequest;
+import jakarta.servlet.ServletResponse;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+
+import org.eclipse.jetty.ee10.servlet.FilterHolder;
+import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
+import org.eclipse.jetty.ee10.servlet.ServletHolder;
+import org.eclipse.jetty.server.NetworkConnector;
+import org.eclipse.jetty.server.Server;
+import org.eclipse.jgit.api.errors.TransportException;
+import org.eclipse.jgit.http.server.GitServlet;
+import org.eclipse.jgit.lib.Repository;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @KestraTest
 class CloneServiceTest {
@@ -102,7 +125,7 @@ class CloneServiceTest {
 
         Path repoPath = Path.of(result.directory());
         assertThat(Files.readString(repoPath.resolve("pre-existing.txt")), is("I was here first\n"));
-        assertThat(Files.readString(repoPath.resolve("repo-file.txt")), is("from repo\n"));
+        assertThat(Files.readString(repoPath.resolve("repo-file.txt")).replace("\r\n", "\n"), is("from repo\n"));
     }
 
     @Test
@@ -240,45 +263,236 @@ class CloneServiceTest {
         assertThat(Files.exists(repoPath.resolve("file2.txt")), is(true));
     }
 
+    private static final String TEST_USER = "gituser";
+    private static final String TEST_PASSWORD = "gitpassword";
+
     @Test
-    void clonesWithCredentialsDoesNotWarnOnFetch() throws Exception {
-        Path remote = Files.createTempDirectory("clone-service-remote-auth-");
-        try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
+    void clonesWithCredentialsAtTagOverHttp() throws Exception {
+        Path remote = Files.createTempDirectory("clone-service-http-auth-tag-");
+        try (Git originGit = Git.init().setDirectory(remote.toFile()).call()) {
             Files.writeString(remote.resolve("file.txt"), "hello\n");
-            git.add().addFilepattern("file.txt").call();
-            git.commit().setMessage("init").call();
-            git.tag().setName("v1.0.0").call();
+            originGit.add().addFilepattern("file.txt").call();
+            originGit.commit().setMessage("init").call();
+            originGit.tag().setName("v1.0.0").call();
+
+            try (GitHttpServer server = new GitHttpServer(originGit.getRepository(), TEST_USER, TEST_PASSWORD)) {
+                RunContext runContext = runContextFactory.of();
+                TestCloningTask gitTask = TestCloningTask.builder()
+                    .username(Property.ofValue(TEST_USER))
+                    .password(Property.ofValue(TEST_PASSWORD))
+                    .build();
+
+                Logger logbackLogger = (Logger) runContext.logger();
+                ListAppender<ILoggingEvent> appender = new ListAppender<>();
+                appender.start();
+                logbackLogger.addAppender(appender);
+
+                try {
+                    var result = CloneService.clone(runContext, gitTask, CloneService.CloneRequest.builder()
+                        .url(server.getUrl())
+                        .path(runContext.workingDir().path())
+                        .tag("v1.0.0")
+                        .cloneAllBranches(true)
+                        .build());
+
+                    Path repoPath = Path.of(result.directory());
+                    assertThat(Files.exists(repoPath.resolve("file.txt")), is(true));
+                } finally {
+                    logbackLogger.detachAppender(appender);
+                }
+
+                boolean hasCredentialsWarning = appender.list.stream()
+                    .anyMatch(event -> event.getFormattedMessage().contains("no CredentialsProvider has been registered")
+                        || event.getFormattedMessage().contains("Fetch before tag checkout failed"));
+
+                assertThat(hasCredentialsWarning, is(false));
+            }
         }
-
-        RunContext runContext = runContextFactory.of();
-        TestCloningTask gitTask = TestCloningTask.builder()
-            .username(Property.ofValue("user"))
-            .password(Property.ofValue("token"))
-            .build();
-
-        Logger logbackLogger = (Logger) runContext.logger();
-        ListAppender<ILoggingEvent> appender = new ListAppender<>();
-        appender.start();
-        logbackLogger.addAppender(appender);
-
-        try {
-            CloneService.clone(runContext, gitTask, CloneService.CloneRequest.builder()
-                .url(remote.toUri().toString())
-                .path(runContext.workingDir().path())
-                .tag("v1.0.0")
-                .cloneAllBranches(true)
-                .build());
-        } finally {
-            logbackLogger.detachAppender(appender);
-        }
-
-        boolean hasCredentialsWarning = appender.list.stream()
-            .anyMatch(event -> event.getFormattedMessage().contains("no CredentialsProvider has been registered"));
-
-        assertThat(hasCredentialsWarning, is(false));
     }
 
     @Test
+    void clonesWithCredentialsAtTagWithNoTagsOverHttp() throws Exception {
+        Path remote = Files.createTempDirectory("clone-service-http-auth-notags-");
+        try (Git originGit = Git.init().setDirectory(remote.toFile()).call()) {
+            Files.writeString(remote.resolve("file.txt"), "hello\n");
+            originGit.add().addFilepattern("file.txt").call();
+            originGit.commit().setMessage("init").call();
+            originGit.tag().setName("v1.0.0").call();
+
+            try (GitHttpServer server = new GitHttpServer(originGit.getRepository(), TEST_USER, TEST_PASSWORD)) {
+                RunContext runContext = runContextFactory.of();
+                TestCloningTask gitTask = TestCloningTask.builder()
+                    .username(Property.ofValue(TEST_USER))
+                    .password(Property.ofValue(TEST_PASSWORD))
+                    .build();
+
+                var result = CloneService.clone(runContext, gitTask, CloneService.CloneRequest.builder()
+                    .url(server.getUrl())
+                    .path(runContext.workingDir().path())
+                    .tag("v1.0.0")
+                    .noTags(true)
+                    .build());
+
+                Path repoPath = Path.of(result.directory());
+                assertThat(Files.exists(repoPath.resolve("file.txt")), is(true));
+            }
+        }
+    }
+
+    @Test
+    void clonesWithCredentialsAtCommitOverHttp() throws Exception {
+        Path remote = Files.createTempDirectory("clone-service-http-auth-commit-");
+        try (Git originGit = Git.init().setDirectory(remote.toFile()).call()) {
+            Files.writeString(remote.resolve("file.txt"), "hello\n");
+            originGit.add().addFilepattern("file.txt").call();
+            var commit = originGit.commit().setMessage("init").call();
+
+            try (GitHttpServer server = new GitHttpServer(originGit.getRepository(), TEST_USER, TEST_PASSWORD)) {
+                RunContext runContext = runContextFactory.of();
+                TestCloningTask gitTask = TestCloningTask.builder()
+                    .username(Property.ofValue(TEST_USER))
+                    .password(Property.ofValue(TEST_PASSWORD))
+                    .build();
+
+                Logger logbackLogger = (Logger) runContext.logger();
+                ListAppender<ILoggingEvent> appender = new ListAppender<>();
+                appender.start();
+                logbackLogger.addAppender(appender);
+
+                try {
+                    var result = CloneService.clone(runContext, gitTask, CloneService.CloneRequest.builder()
+                        .url(server.getUrl())
+                        .path(runContext.workingDir().path())
+                        .commit(commit.name())
+                        .cloneAllBranches(true)
+                        .build());
+
+                    Path repoPath = Path.of(result.directory());
+                    assertThat(Files.exists(repoPath.resolve("file.txt")), is(true));
+                } finally {
+                    logbackLogger.detachAppender(appender);
+                }
+
+                boolean hasFetchWarning = appender.list.stream()
+                    .anyMatch(event -> event.getFormattedMessage().contains("Fetch before checkout failed")
+                        || event.getFormattedMessage().contains("no CredentialsProvider has been registered"));
+                assertThat(hasFetchWarning, is(false));
+            }
+        }
+    }
+
+    @Test
+    void cloningAtTagWithoutCredentialsOverHttpFails() throws Exception {
+        Path remote = Files.createTempDirectory("clone-service-http-unauth-tag-");
+        try (Git originGit = Git.init().setDirectory(remote.toFile()).call()) {
+            Files.writeString(remote.resolve("file.txt"), "hello\n");
+            originGit.add().addFilepattern("file.txt").call();
+            originGit.commit().setMessage("init").call();
+            originGit.tag().setName("v1.0.0").call();
+
+            try (GitHttpServer server = new GitHttpServer(originGit.getRepository(), TEST_USER, TEST_PASSWORD)) {
+                RunContext runContext = runContextFactory.of();
+                TestCloningTask gitTask = TestCloningTask.builder().build();
+
+                assertThrows(TransportException.class, () ->
+                    CloneService.clone(runContext, gitTask, CloneService.CloneRequest.builder()
+                        .url(server.getUrl())
+                        .path(runContext.workingDir().path())
+                        .tag("v1.0.0")
+                        .cloneAllBranches(true)
+                        .build())
+                );
+            }
+        }
+    }
+
+    @Test
+    void cloningAtCommitWithoutCredentialsOverHttpFails() throws Exception {
+        Path remote = Files.createTempDirectory("clone-service-http-unauth-commit-");
+        try (Git originGit = Git.init().setDirectory(remote.toFile()).call()) {
+            Files.writeString(remote.resolve("file.txt"), "hello\n");
+            originGit.add().addFilepattern("file.txt").call();
+            var commit = originGit.commit().setMessage("init").call();
+
+            try (GitHttpServer server = new GitHttpServer(originGit.getRepository(), TEST_USER, TEST_PASSWORD)) {
+                RunContext runContext = runContextFactory.of();
+                TestCloningTask gitTask = TestCloningTask.builder().build();
+
+                assertThrows(TransportException.class, () ->
+                    CloneService.clone(runContext, gitTask, CloneService.CloneRequest.builder()
+                        .url(server.getUrl())
+                        .path(runContext.workingDir().path())
+                        .commit(commit.name())
+                        .cloneAllBranches(true)
+                        .build())
+                );
+            }
+        }
+    }
+
+    static class GitHttpServer implements AutoCloseable {
+        private final Server server;
+        private final int port;
+        private final String username;
+        private final String password;
+
+        GitHttpServer(Repository repository, String username, String password) throws Exception {
+            this.username = username;
+            this.password = password;
+
+            this.server = new Server(0);
+            ServletContextHandler context = new ServletContextHandler();
+            context.setContextPath("/");
+
+            context.addFilter(new FilterHolder(new Filter() {
+                @Override
+                public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {
+                    HttpServletRequest req = (HttpServletRequest) request;
+                    HttpServletResponse res = (HttpServletResponse) response;
+
+                    String auth = req.getHeader("Authorization");
+                    if (auth != null && auth.startsWith("Basic ")) {
+                        String creds = new String(Base64.getDecoder().decode(auth.substring(6)), StandardCharsets.UTF_8);
+                        int colon = creds.indexOf(':');
+                        if (colon > 0) {
+                            String user = creds.substring(0, colon);
+                            String pass = creds.substring(colon + 1);
+                            if (GitHttpServer.this.username.equals(user) && GitHttpServer.this.password.equals(pass)) {
+                                chain.doFilter(request, response);
+                                return;
+                            }
+                        }
+                    }
+
+                    res.setHeader("WWW-Authenticate", "Basic realm=\"Git\"");
+                    res.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                }
+            }), "/*", EnumSet.of(DispatcherType.REQUEST));
+
+            GitServlet gitServlet = new GitServlet();
+            gitServlet.setRepositoryResolver((req, name) -> {
+                repository.incrementOpen();
+                return repository;
+            });
+            context.addServlet(new ServletHolder(gitServlet), "/*");
+
+            server.setHandler(context);
+            server.start();
+            this.port = ((NetworkConnector) server.getConnectors()[0]).getLocalPort();
+        }
+
+        String getUrl() {
+            return "http://localhost:" + port + "/repo.git";
+        }
+
+        @Override
+        public void close() throws Exception {
+            server.stop();
+        }
+    }
+
+    @Test
+    @SuppressWarnings("deprecation")
     void backwardCompatibilityCheckoutMethodsSucceed() throws Exception {
         Path remote = Files.createTempDirectory("clone-service-legacy-");
         try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
