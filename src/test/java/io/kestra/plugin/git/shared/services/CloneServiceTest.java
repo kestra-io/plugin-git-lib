@@ -33,8 +33,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.eclipse.jetty.ee10.servlet.FilterHolder;
 import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
 import org.eclipse.jetty.ee10.servlet.ServletHolder;
-import org.eclipse.jetty.server.NetworkConnector;
 import org.eclipse.jetty.server.Server;
+import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jgit.api.errors.TransportException;
 import org.eclipse.jgit.http.server.GitServlet;
 import org.eclipse.jgit.lib.Repository;
@@ -431,6 +431,8 @@ class CloneServiceTest {
     }
 
     static class GitHttpServer implements AutoCloseable {
+        private static final String LOOPBACK_HOST = "127.0.0.1";
+
         private final Server server;
         private final int port;
         private final String username;
@@ -440,7 +442,11 @@ class CloneServiceTest {
             this.username = username;
             this.password = password;
 
-            this.server = new Server(0);
+            this.server = new Server();
+            ServerConnector connector = new ServerConnector(server);
+            connector.setHost(LOOPBACK_HOST);
+            connector.setPort(0);
+            server.addConnector(connector);
             ServletContextHandler context = new ServletContextHandler();
             context.setContextPath("/");
 
@@ -478,11 +484,11 @@ class CloneServiceTest {
 
             server.setHandler(context);
             server.start();
-            this.port = ((NetworkConnector) server.getConnectors()[0]).getLocalPort();
+            this.port = connector.getLocalPort();
         }
 
         String getUrl() {
-            return "http://localhost:" + port + "/repo.git";
+            return "http://" + LOOPBACK_HOST + ":" + port + "/repo.git";
         }
 
         @Override
