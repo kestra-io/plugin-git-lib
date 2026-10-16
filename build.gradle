@@ -1,7 +1,7 @@
 plugins {
-    id 'io.kestra.gradle.repository-conventions' version '1.2.11'
+    id 'io.kestra.gradle.repository-conventions' version '1.2.12'
     id "com.vanniktech.maven.publish" version "0.37.0"
-    id "io.kestra.gradle.inject-bom-versions" version '1.2.11'
+    id "io.kestra.gradle.inject-bom-versions" version '1.2.12'
     id 'java-library'
     id 'java-test-fixtures'
     id "idea"
@@ -50,6 +50,10 @@ dependencies {
 
     // git — exposed as api so consumers (plugin-git, plugin-ee-git) inherit them transitively
     // kept in lockstep with plugin-ee-git's jgit version to avoid silently downgrading it
+    // MAINTENANCE: JGitCleanupIsolation reaches into the internal org.eclipse.jgit.internal.util.CleanupService
+    // to suppress JGit's JVM shutdown hook (issue #23). That internal API has no compatibility contract, so on any
+    // JGit bump re-run JGitShutdownRaceTest — it is the canary for both the mechanism (hook still suppressible)
+    // and each failure mode (checkout index lock, fetch/partial-clone cleanup) — before releasing.
     api 'org.eclipse.jgit:org.eclipse.jgit:7.8.0.202609011348-r'
     api 'org.eclipse.jgit:org.eclipse.jgit.ssh.jsch:7.8.0.202609011348-r'
     api "org.eclipse.jgit:org.eclipse.jgit.http.apache:7.8.0.202609011348-r"
@@ -110,6 +114,9 @@ dependencies {
     testImplementation "org.hamcrest:hamcrest"
     testImplementation "org.hamcrest:hamcrest-library"
     testImplementation "ch.qos.logback:logback-classic"
+    testImplementation "org.eclipse.jgit:org.eclipse.jgit.http.server:7.8.0.202609011348-r"
+    testImplementation "org.eclipse.jetty:jetty-server:12.0.31"
+    testImplementation "org.eclipse.jetty.ee10:jetty-ee10-servlet:12.0.31"
 }
 
 /**********************************************************************************************************************\

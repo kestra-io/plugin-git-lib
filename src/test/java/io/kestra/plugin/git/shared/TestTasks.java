@@ -289,4 +289,49 @@ public final class TestTasks {
             }
         }
     }
+
+    /**
+     * A {@link TestSyncTask} keeping per-run counters in its own {@link TestRunState}, and recording the state each
+     * {@code RunState}-aware hook receives.
+     */
+    @SuperBuilder(toBuilder = true)
+    @ToString
+    @EqualsAndHashCode(callSuper = true)
+    @Getter
+    @NoArgsConstructor
+    public static class TestStatefulSyncTask extends TestSyncTask {
+        @Builder.Default
+        private List<RunState> seenRunStates = new CopyOnWriteArrayList<>();
+
+        @Override
+        protected RunState newRunState() {
+            return new TestRunState();
+        }
+
+        @Override
+        protected List<String> fetchResources(RunContext runContext, String renderedNamespace, RunState runState) {
+            seenRunStates.add(runState);
+            ((TestRunState) runState).fetches++;
+            return super.fetchResources(runContext, renderedNamespace);
+        }
+
+        @Override
+        protected String simulateResourceWrite(RunContext runContext, String renderedNamespace, URI uri, InputStream inputStream, RunState runState) {
+            seenRunStates.add(runState);
+            ((TestRunState) runState).writes++;
+            return super.simulateResourceWrite(runContext, renderedNamespace, uri, inputStream);
+        }
+
+        @Override
+        protected String writeResource(RunContext runContext, String renderedNamespace, URI uri, InputStream inputStream, RunState runState) {
+            seenRunStates.add(runState);
+            ((TestRunState) runState).writes++;
+            return super.writeResource(runContext, renderedNamespace, uri, inputStream);
+        }
+
+        public static class TestRunState extends RunState {
+            int fetches;
+            int writes;
+        }
+    }
 }

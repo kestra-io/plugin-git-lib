@@ -17,6 +17,9 @@ import io.kestra.core.models.property.Property;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextFactory;
 import io.kestra.core.utils.IdUtils;
+import io.kestra.plugin.git.shared.AbstractSyncTask.RunState;
+import io.kestra.plugin.git.shared.TestTasks.TestStatefulSyncTask;
+import io.kestra.plugin.git.shared.TestTasks.TestStatefulSyncTask.TestRunState;
 import io.kestra.plugin.git.shared.TestTasks.TestSyncTask;
 
 import jakarta.inject.Inject;
@@ -25,11 +28,13 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.empty;
+import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.sameInstance;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @KestraTest
@@ -117,6 +122,40 @@ class AbstractSyncTaskTest {
         task.run(runContext);
 
         assertThat(deletedResources, empty());
+    }
+
+    /** A task instance can be shared by several executions, so each run must get its own RunState (kestra-io/plugin-git#364). */
+    @Test
+    void run_givesEachRunItsOwnRunState() throws Exception {
+        Path remote = newRemoteWithDefaultBranchContent();
+        try (Git git = Git.open(remote.toFile())) {
+            git.branchCreate().setName("main").call();
+        }
+
+        for (var dryRun : List.of(false, true)) {
+            TestStatefulSyncTask task = TestStatefulSyncTask.builder()
+                .url(Property.ofValue(remote.toUri().toString()))
+                .dryRun(Property.ofValue(dryRun))
+                .build();
+
+            task.run(runContextFactory.of());
+            int firstRunCalls = task.getSeenRunStates().size();
+            task.run(runContextFactory.of());
+
+            List<RunState> first = task.getSeenRunStates().subList(0, firstRunCalls);
+            List<RunState> second = task.getSeenRunStates().subList(firstRunCalls, task.getSeenRunStates().size());
+            assertThat(first, not(empty()));
+            assertThat(second, not(empty()));
+            assertThat(first.stream().distinct().count(), is(1L));
+            assertThat(second.stream().distinct().count(), is(1L));
+            assertThat(first.getFirst(), not(sameInstance(second.getFirst())));
+
+            for (RunState runState : List.of(first.getFirst(), second.getFirst())) {
+                TestRunState state = (TestRunState) runState;
+                assertThat(state.fetches, is(1));
+                assertThat(state.writes, greaterThan(0));
+            }
+        }
     }
 
     /**

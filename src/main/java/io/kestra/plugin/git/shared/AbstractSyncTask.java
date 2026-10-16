@@ -164,17 +164,46 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
         return Property.ofValue(true);
     }
 
+    /**
+     * Creates the state for one run, passed to the {@link RunState}-aware overloads of {@link #fetchResources},
+     * {@link #simulateResourceWrite} and {@link #writeResource}.
+     *
+     * <p>A subclass that caches something for the current run returns its own {@link RunState} subclass here instead
+     * of keeping it in an instance field, since a task instance can be shared by several executions.
+     */
+    protected RunState newRunState() {
+        return new RunState();
+    }
+
     protected boolean mustKeep(RunContext runContext, T instanceResource) {
         return false;
     }
 
     protected abstract void deleteResource(RunContext runContext, String renderedNamespace, T instanceResource) throws IOException;
 
-    protected abstract T simulateResourceWrite(RunContext runContext, String renderedNamespace, URI uri, InputStream inputStream)
-        throws IOException, FlowProcessingException, IllegalVariableEvaluationException;
+    /** Defaults to {@link #simulateResourceWrite(RunContext, String, URI, InputStream)}, ignoring the run state. */
+    protected T simulateResourceWrite(RunContext runContext, String renderedNamespace, URI uri, InputStream inputStream, RunState runState)
+        throws IOException, FlowProcessingException, IllegalVariableEvaluationException {
+        return this.simulateResourceWrite(runContext, renderedNamespace, uri, inputStream);
+    }
 
-    protected abstract T writeResource(RunContext runContext, String renderedNamespace, URI uri, InputStream inputStream)
-        throws IOException, URISyntaxException, FlowProcessingException, IllegalVariableEvaluationException;
+    /** Must be overridden unless the {@link RunState}-aware overload is. */
+    protected T simulateResourceWrite(RunContext runContext, String renderedNamespace, URI uri, InputStream inputStream)
+        throws IOException, FlowProcessingException, IllegalVariableEvaluationException {
+        throw this.missingOverride("simulateResourceWrite");
+    }
+
+    /** Defaults to {@link #writeResource(RunContext, String, URI, InputStream)}, ignoring the run state. */
+    protected T writeResource(RunContext runContext, String renderedNamespace, URI uri, InputStream inputStream, RunState runState)
+        throws IOException, URISyntaxException, FlowProcessingException, IllegalVariableEvaluationException {
+        return this.writeResource(runContext, renderedNamespace, uri, inputStream);
+    }
+
+    /** Must be overridden unless the {@link RunState}-aware overload is. */
+    protected T writeResource(RunContext runContext, String renderedNamespace, URI uri, InputStream inputStream)
+        throws IOException, URISyntaxException, FlowProcessingException, IllegalVariableEvaluationException {
+        throw this.missingOverride("writeResource");
+    }
 
     protected abstract SyncResult wrapper(RunContext runContext, String renderedGitDirectory, String renderedNamespace, URI resourceUri, T resourceBeforeUpdate, T resourceAfterUpdate)
         throws IOException;
@@ -256,8 +285,9 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
             Map<URI, Supplier<InputStream>> gitContentByUri = this.gitResourcesContentByUri(localGitDirectory, runContext);
 
             String renderedNamespace = runContext.render(this.fetchedNamespace()).as(String.class).orElse(null);
+            RunState runState = this.newRunState();
 
-            Map<URI, T> beforeUpdateResourcesByUri = this.fetchResources(runContext, renderedNamespace)
+            Map<URI, T> beforeUpdateResourcesByUri = this.fetchResources(runContext, renderedNamespace, runState)
                 .stream()
                 .collect(
                     Collectors.toMap(
@@ -273,9 +303,9 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
                     InputStream inputStream = e.getValue().get();
                     T resource;
                     if (runContext.render(this.dryRun).as(Boolean.class).orElseThrow()) {
-                        resource = this.simulateResourceWrite(runContext, renderedNamespace, e.getKey(), inputStream);
+                        resource = this.simulateResourceWrite(runContext, renderedNamespace, e.getKey(), inputStream, runState);
                     } else {
-                        resource = this.writeResource(runContext, renderedNamespace, e.getKey(), inputStream);
+                        resource = this.writeResource(runContext, renderedNamespace, e.getKey(), inputStream, runState);
                     }
 
                     return Pair.of(e.getKey(), resource);
@@ -318,11 +348,32 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
         }
     }
 
-    protected abstract List<T> fetchResources(RunContext runContext, String renderedNamespace) throws IOException, IllegalVariableEvaluationException;
+    /** Defaults to {@link #fetchResources(RunContext, String)}, ignoring the run state. */
+    protected List<T> fetchResources(RunContext runContext, String renderedNamespace, RunState runState) throws IOException, IllegalVariableEvaluationException {
+        return this.fetchResources(runContext, renderedNamespace);
+    }
+
+    /** Must be overridden unless the {@link RunState}-aware overload is. */
+    protected List<T> fetchResources(RunContext runContext, String renderedNamespace) throws IOException, IllegalVariableEvaluationException {
+        throw this.missingOverride("fetchResources");
+    }
 
     protected abstract URI toUri(String renderedNamespace, T resource);
 
     protected abstract O output(URI diffFileStorageUri);
+
+    private UnsupportedOperationException missingOverride(String method) {
+        return new UnsupportedOperationException(
+            "%s must override %s, either with or without the RunState parameter.".formatted(this.getClass().getName(), method)
+        );
+    }
+
+    /**
+     * State for a single run of the sync; see {@link #newRunState()}. Only used from the thread running the sync, so it is
+     * not thread-safe.
+     */
+    public static class RunState {
+    }
 
     @SuperBuilder
     @Getter
