@@ -118,14 +118,11 @@ public final class TestTasks {
          */
         private List<String> globs;
 
+        private Property<String> fetchedNamespace;
+
         @Override
         public Property<String> getBranch() {
             return Property.ofValue("main");
-        }
-
-        @Override
-        public Property<String> getCommitMessage() {
-            return Property.ofValue("test commit");
         }
 
         @Override
@@ -140,7 +137,7 @@ public final class TestTasks {
 
         @Override
         public Property<String> fetchedNamespace() {
-            return Property.ofValue(null);
+            return fetchedNamespace;
         }
 
         @Override

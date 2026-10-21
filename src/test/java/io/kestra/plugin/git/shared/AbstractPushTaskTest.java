@@ -107,6 +107,17 @@ class AbstractPushTaskTest {
         }
     }
 
+    private String readLastCommitMessage(Path remote) throws Exception {
+        try (
+            Git git = Git.open(remote.toFile());
+            RevWalk revWalk = new RevWalk(git.getRepository())
+        ) {
+            var headId = git.getRepository().resolve("refs/heads/main");
+            RevCommit commit = revWalk.parseCommit(headId);
+            return commit.getFullMessage();
+        }
+    }
+
     private void assertDiffs(RunContext runContext, URI diffFileUri, List<Map<String, String>> expectedDiffs) throws IOException {
         String diffSummary = new String(runContext.storage().getFile(diffFileUri).readAllBytes(), StandardCharsets.UTF_8);
         List<Map<String, String>> diffMaps = diffSummary.lines()
@@ -384,5 +395,73 @@ class AbstractPushTaskTest {
         assertThat(output.getCommitId(), notNullValue());
         assertThat(pushedTreeContains(remote, "flow-a.yml"), is(false));
         assertThat(pushedTreeContains(remote, "flow-b.yml"), is(true));
+    }
+
+    @Test
+    void commitMessage_defaultFallback_resolvesPebbleExpressionInFetchedNamespace() throws Exception {
+        Path remote = newPushableRemote();
+        RunContext runContext = runContextFactory.of(Map.of("flow", Map.of("namespace", "company.team")));
+
+        TestPushTask task = TestPushTask.builder()
+            .url(Property.ofValue(remote.toUri().toString()))
+            .filesToWrite(Map.of("flow.yml", "id: test\n"))
+            .fetchedNamespace(Property.ofExpression("{{ flow.namespace }}"))
+            .build();
+
+        TestPushTask.Output output = task.run(runContext);
+
+        assertThat(output.getCommitId(), notNullValue());
+        assertThat(readLastCommitMessage(remote), is("Add files from company.team namespace"));
+    }
+
+    @Test
+    void commitMessage_defaultFallback_whenFetchedNamespaceNull() throws Exception {
+        Path remote = newPushableRemote();
+        RunContext runContext = runContextFactory.of();
+
+        TestPushTask task = TestPushTask.builder()
+            .url(Property.ofValue(remote.toUri().toString()))
+            .filesToWrite(Map.of("flow.yml", "id: test\n"))
+            .build();
+
+        TestPushTask.Output output = task.run(runContext);
+
+        assertThat(output.getCommitId(), notNullValue());
+        assertThat(readLastCommitMessage(remote), is("Push from Kestra"));
+    }
+
+    @Test
+    void commitMessage_defaultFallback_whenCommitMessageBlank() throws Exception {
+        Path remote = newPushableRemote();
+        RunContext runContext = runContextFactory.of(Map.of("flow", Map.of("namespace", "company.team")));
+
+        TestPushTask task = TestPushTask.builder()
+            .url(Property.ofValue(remote.toUri().toString()))
+            .filesToWrite(Map.of("flow.yml", "id: test\n"))
+            .commitMessage(Property.ofValue("   "))
+            .fetchedNamespace(Property.ofExpression("{{ flow.namespace }}"))
+            .build();
+
+        TestPushTask.Output output = task.run(runContext);
+
+        assertThat(output.getCommitId(), notNullValue());
+        assertThat(readLastCommitMessage(remote), is("Add files from company.team namespace"));
+    }
+
+    @Test
+    void commitMessage_explicitExpression_isRendered() throws Exception {
+        Path remote = newPushableRemote();
+        RunContext runContext = runContextFactory.of(Map.of("flow", Map.of("id", "my-flow")));
+
+        TestPushTask task = TestPushTask.builder()
+            .url(Property.ofValue(remote.toUri().toString()))
+            .filesToWrite(Map.of("flow.yml", "id: test\n"))
+            .commitMessage(Property.ofExpression("Deploying flow {{ flow.id }}"))
+            .build();
+
+        TestPushTask.Output output = task.run(runContext);
+
+        assertThat(output.getCommitId(), notNullValue());
+        assertThat(readLastCommitMessage(remote), is("Deploying flow my-flow"));
     }
 }
