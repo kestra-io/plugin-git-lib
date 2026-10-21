@@ -68,10 +68,6 @@ public abstract class AbstractPushTask<O extends AbstractPushTask.Output> extend
     };
     public static final ObjectMapper MAPPER = JacksonMapper.ofJson();
 
-    @Schema(
-        title = "Git commit message"
-    )
-    @PluginProperty(group = "advanced")
     protected Property<String> commitMessage;
 
     @Schema(
