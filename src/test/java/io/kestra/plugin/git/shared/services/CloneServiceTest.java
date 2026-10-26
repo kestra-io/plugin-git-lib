@@ -512,4 +512,71 @@ class CloneServiceTest {
             CloneService.checkoutCommit(git, commit.name(), runContextFactory.of().logger(), false);
         }
     }
+
+    @Test
+    void clone_checksOutBranchWithRefsHeadsPrefix() throws Exception {
+        Path remote = Files.createTempDirectory("clone-service-remote-refs-heads-");
+        String initialBranch;
+        try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
+            Files.writeString(remote.resolve("file.txt"), "hello\n");
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("init").call();
+            initialBranch = git.getRepository().getBranch();
+
+            git.checkout().setCreateBranch(true).setName("feature/mybranch").call();
+            Files.writeString(remote.resolve("feature.txt"), "feature\n");
+            git.add().addFilepattern("feature.txt").call();
+            git.commit().setMessage("feature").call();
+
+            git.checkout().setName(initialBranch).call();
+        }
+
+        RunContext runContext = runContextFactory.of();
+        TestCloningTask gitTask = TestCloningTask.builder().build();
+
+        var result = CloneService.clone(runContext, gitTask, CloneService.CloneRequest.builder()
+            .url(remote.toUri().toString())
+            .path(runContext.workingDir().path())
+            .branch("refs/heads/feature/mybranch")
+            .build());
+
+        try (Git cloned = Git.open(Path.of(result.directory()).toFile())) {
+            assertThat(cloned.getRepository().getBranch(), is("feature/mybranch"));
+        }
+    }
+
+    @Test
+    void clone_checksOutBranchWithRefsHeadsPrefix_intoNonEmptyDirectory() throws Exception {
+        Path remote = Files.createTempDirectory("clone-service-remote-refs-heads-non-empty-");
+        String initialBranch;
+        try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
+            Files.writeString(remote.resolve("file.txt"), "hello\n");
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("init").call();
+            initialBranch = git.getRepository().getBranch();
+
+            git.checkout().setCreateBranch(true).setName("feature/mybranch").call();
+            Files.writeString(remote.resolve("feature.txt"), "feature\n");
+            git.add().addFilepattern("feature.txt").call();
+            git.commit().setMessage("feature").call();
+
+            git.checkout().setName(initialBranch).call();
+        }
+
+        RunContext runContext = runContextFactory.of();
+        Files.writeString(runContext.workingDir().path().resolve("pre-existing.txt"), "pre-existing\n");
+
+        TestCloningTask gitTask = TestCloningTask.builder().build();
+
+        var result = CloneService.clone(runContext, gitTask, CloneService.CloneRequest.builder()
+            .url(remote.toUri().toString())
+            .path(runContext.workingDir().path())
+            .branch("refs/heads/feature/mybranch")
+            .build());
+
+        try (Git cloned = Git.open(Path.of(result.directory()).toFile())) {
+            assertThat(cloned.getRepository().getBranch(), is("feature/mybranch"));
+            assertThat(Files.exists(Path.of(result.directory()).resolve("feature.txt")), is(true));
+        }
+    }
 }

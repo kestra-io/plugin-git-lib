@@ -23,12 +23,13 @@ public class GitService {
     private AbstractGitTask gitTask;
 
     public Git cloneBranch(RunContext runContext, String branch, Property<Boolean> withSubmodules) throws Exception {
+        String shortBranch = CloneService.shortBranchName(branch);
         boolean branchExists = this.branchExists(runContext, branch);
 
         CloneService.CloneRequest request = CloneService.CloneRequest.builder()
             .url(runContext.render(gitTask.getUrl()).as(String.class).orElse(null))
             .path(runContext.workingDir().path())
-            .branch(branchExists ? branch : null)
+            .branch(branchExists ? shortBranch : null)
             .depth(1)
             .cloneAllBranches(true)
             .noTags(false)
@@ -36,7 +37,7 @@ public class GitService {
             .build();
 
         if (!branchExists) {
-            runContext.logger().info("Branch {} does not exist, creating it", branch);
+            runContext.logger().info("Branch {} does not exist, creating it", shortBranch);
         }
 
         CloneService.clone(runContext, gitTask, request);
@@ -47,7 +48,7 @@ public class GitService {
 
         if (!branchExists && git.getRepository().resolve(Constants.HEAD) != null) {
             git.checkout()
-                .setName(branch)
+                .setName(shortBranch)
                 .setCreateBranch(true)
                 .call();
         }
@@ -58,7 +59,7 @@ public class GitService {
     public boolean branchExists(RunContext runContext, String branch) throws Exception {
         return gitTask.authentified(Git.lsRemoteRepository().setRemote(runContext.render(gitTask.getUrl()).as(String.class).orElse(null)), runContext)
             .callAsMap()
-            .containsKey(R_HEADS + branch);
+            .containsKey(R_HEADS + CloneService.shortBranchName(branch));
     }
 
     /**

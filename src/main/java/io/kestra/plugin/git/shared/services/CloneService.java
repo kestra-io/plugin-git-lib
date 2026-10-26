@@ -89,7 +89,7 @@ public final class CloneService {
 
         if (!hasCommit && !hasTag) {
             if (request.branch() != null) {
-                cloneCommand.setBranch(request.branch());
+                cloneCommand.setBranch(shortBranchName(request.branch()));
             }
             if (request.depth() != null) {
                 cloneCommand.setDepth(request.depth());
@@ -177,7 +177,7 @@ public final class CloneService {
                 checkoutTag(runContext, gitTask, git, request.tag(), logger, request.noTags());
             } else {
                 // Resolve the target branch; fall back to detecting the remote HEAD default branch
-                var targetBranch = request.branch();
+                var targetBranch = shortBranchName(request.branch());
                 if (targetBranch == null) {
                     var headRef = git.getRepository().exactRef("refs/remotes/origin/HEAD");
                     if (headRef != null && headRef.getTarget() != null) {
@@ -326,8 +326,9 @@ public final class CloneService {
 
     public static void checkoutBranch(Git git, String branch, Logger logger) throws Exception {
         if (branch != null) {
-            git.checkout().setName(branch).call();
-            logger.info("Checked out branch {}", branch);
+            String branchName = shortBranchName(branch);
+            git.checkout().setName(branchName).call();
+            logger.info("Checked out branch {}", branchName);
         }
     }
 
@@ -350,7 +351,7 @@ public final class CloneService {
         return branch.startsWith("refs/heads/") ? branch : "refs/heads/" + branch;
     }
 
-    private static String shortBranchName(String branch) {
+    public static String shortBranchName(String branch) {
         if (branch == null) {
             return null;
         }
