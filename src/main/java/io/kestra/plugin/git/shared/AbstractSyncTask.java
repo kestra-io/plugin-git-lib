@@ -14,7 +14,6 @@ import java.util.stream.Stream;
 
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
-import org.eclipse.jgit.lib.Constants;
 
 import io.kestra.core.exceptions.FlowProcessingException;
 import io.kestra.core.exceptions.IllegalVariableEvaluationException;
@@ -283,9 +282,7 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
         gitService.ensureBranchExistsOrFail(runContext, renderedBranch, runContext.render(this.failOnMissingBranch).as(Boolean.class).orElse(true));
 
         try (var git = gitService.cloneBranch(runContext, renderedBranch, this.cloneSubmodules)) {
-            var head = git.getRepository().resolve(Constants.HEAD);
-            var commitId = head == null ? null : head.getName();
-            var commitURL = buildCommitUrl(gitService.getHttpUrl(runContext.render(this.url).as(String.class).orElse(null)), renderedBranch, commitId);
+            var headCommit = headCommit(git, runContext.render(this.url).as(String.class).orElse(null), renderedBranch);
 
             Path localGitDirectory = this.createGitDirectory(runContext);
             Map<URI, Supplier<InputStream>> gitContentByUri = this.gitResourcesContentByUri(localGitDirectory, runContext);
@@ -350,7 +347,7 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
 
             URI diffFileStorageUri = this.createDiffFile(runContext, renderedNamespace, gitUriByResourceUri, beforeUpdateResourcesByUri, updatedResourcesByUri, deleted);
 
-            return output(diffFileStorageUri, commitId, commitURL);
+            return output(diffFileStorageUri, headCommit.commitId(), headCommit.commitURL());
         }
     }
 
@@ -393,7 +390,10 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
 
         @Schema(
             title = "URL to see what’s included in the commit",
-            description = "Example format for GitHub: https://github.com/username/your_repo/commit/{commitId}"
+            description = """
+                Example format for GitHub: https://github.com/username/your_repo/commit/{commitId}
+
+                Null when there is no commit. For remotes that are not hosted (for example `file://`), it is not a browsable URL."""
         )
         @Nullable
         private String commitURL;

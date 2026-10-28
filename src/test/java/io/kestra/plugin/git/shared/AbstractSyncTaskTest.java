@@ -351,31 +351,38 @@ class AbstractSyncTaskTest {
     }
 
     @Test
-    void run_outputsHeadCommitOfClonedBranch() throws Exception {
-        Path remote = newRemoteWithDefaultBranchContent();
-        String head;
-        try (Git git = Git.open(remote.toFile())) {
-            git.branchCreate().setName("main").call();
-            head = git.getRepository().resolve("refs/heads/main").getName();
+    void run_outputsTipOfRequestedBranchNotDefaultBranch() throws Exception {
+        var remote = newRemoteWithDefaultBranchContent();
+        String branchTip;
+        String defaultTip;
+        try (var git = Git.open(remote.toFile())) {
+            var defaultBranch = git.getRepository().getBranch();
+            defaultTip = git.getRepository().resolve("HEAD").getName();
+            git.checkout().setCreateBranch(true).setName("release").call();
+            Files.writeString(remote.resolve("other.txt"), "other\n");
+            git.add().addFilepattern("other.txt").call();
+            branchTip = git.commit().setMessage("on main only").call().getName();
+            git.checkout().setName(defaultBranch).call();
         }
+        assertThat(branchTip, not(defaultTip));
 
         for (var dryRun : List.of(false, true)) {
             var task = TestSyncTask.builder()
                 .id("sync-" + IdUtils.create())
                 .url(Property.ofValue(remote.toUri().toString()))
-                .branch(Property.ofValue("main"))
+                .branch(Property.ofValue("release"))
                 .dryRun(Property.ofValue(dryRun))
                 .build();
 
             var output = task.run(runContextFactory.of());
 
-            assertThat(output.getCommitId(), is(head));
+            assertThat(output.getCommitId(), is(branchTip));
         }
     }
 
     @Test
     void run_outputsNullCommitWhenRepositoryHasNoCommit() throws Exception {
-        Path remote = Files.createTempDirectory("sync-task-empty-remote-");
+        var remote = Files.createTempDirectory("sync-task-empty-remote-");
         Git.init().setDirectory(remote.toFile()).call().close();
 
         var task = TestSyncTask.builder()
