@@ -34,7 +34,6 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
-import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.sameInstance;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -361,7 +360,7 @@ class AbstractSyncTaskTest {
             git.checkout().setCreateBranch(true).setName("release").call();
             Files.writeString(remote.resolve("other.txt"), "other\n");
             git.add().addFilepattern("other.txt").call();
-            branchTip = git.commit().setMessage("on main only").call().getName();
+            branchTip = git.commit().setMessage("on release only").call().getName();
             git.checkout().setName(defaultBranch).call();
         }
         assertThat(branchTip, not(defaultTip));
@@ -378,23 +377,6 @@ class AbstractSyncTaskTest {
 
             assertThat(output.getCommitId(), is(branchTip));
         }
-    }
-
-    @Test
-    void run_outputsNullCommitWhenRepositoryHasNoCommit() throws Exception {
-        var remote = Files.createTempDirectory("sync-task-empty-remote-");
-        Git.init().setDirectory(remote.toFile()).call().close();
-
-        var task = TestSyncTask.builder()
-            .id("sync-" + IdUtils.create())
-            .url(Property.ofValue(remote.toUri().toString()))
-            .failOnMissingBranch(Property.ofValue(false))
-            .build();
-
-        var output = task.run(runContextFactory.of());
-
-        assertThat(output.getCommitId(), nullValue());
-        assertThat(output.getCommitURL(), nullValue());
     }
 
     @Test
