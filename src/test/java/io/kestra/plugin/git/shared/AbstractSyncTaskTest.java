@@ -34,6 +34,7 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.sameInstance;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -347,6 +348,46 @@ class AbstractSyncTaskTest {
                 assertThat(task.getDeletedResources(), contains("/gone%20file.txt"));
             }
         }
+    }
+
+    @Test
+    void run_outputsHeadCommitOfClonedBranch() throws Exception {
+        Path remote = newRemoteWithDefaultBranchContent();
+        String head;
+        try (Git git = Git.open(remote.toFile())) {
+            git.branchCreate().setName("main").call();
+            head = git.getRepository().resolve("refs/heads/main").getName();
+        }
+
+        for (var dryRun : List.of(false, true)) {
+            var task = TestSyncTask.builder()
+                .id("sync-" + IdUtils.create())
+                .url(Property.ofValue(remote.toUri().toString()))
+                .branch(Property.ofValue("main"))
+                .dryRun(Property.ofValue(dryRun))
+                .build();
+
+            var output = task.run(runContextFactory.of());
+
+            assertThat(output.getCommitId(), is(head));
+        }
+    }
+
+    @Test
+    void run_outputsNullCommitWhenRepositoryHasNoCommit() throws Exception {
+        Path remote = Files.createTempDirectory("sync-task-empty-remote-");
+        Git.init().setDirectory(remote.toFile()).call().close();
+
+        var task = TestSyncTask.builder()
+            .id("sync-" + IdUtils.create())
+            .url(Property.ofValue(remote.toUri().toString()))
+            .failOnMissingBranch(Property.ofValue(false))
+            .build();
+
+        var output = task.run(runContextFactory.of());
+
+        assertThat(output.getCommitId(), nullValue());
+        assertThat(output.getCommitURL(), nullValue());
     }
 
     @Test

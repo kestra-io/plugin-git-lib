@@ -14,6 +14,7 @@ import java.util.stream.Stream;
 
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
+import org.eclipse.jgit.lib.Constants;
 
 import io.kestra.core.exceptions.FlowProcessingException;
 import io.kestra.core.exceptions.IllegalVariableEvaluationException;
@@ -25,6 +26,7 @@ import io.kestra.core.utils.KestraIgnore;
 import io.kestra.plugin.git.shared.services.GitService;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.annotation.Nullable;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -281,6 +283,10 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
         gitService.ensureBranchExistsOrFail(runContext, renderedBranch, runContext.render(this.failOnMissingBranch).as(Boolean.class).orElse(true));
 
         try (var git = gitService.cloneBranch(runContext, renderedBranch, this.cloneSubmodules)) {
+            var head = git.getRepository().resolve(Constants.HEAD);
+            var commitId = head == null ? null : head.getName();
+            var commitURL = buildCommitUrl(gitService.getHttpUrl(runContext.render(this.url).as(String.class).orElse(null)), renderedBranch, commitId);
+
             Path localGitDirectory = this.createGitDirectory(runContext);
             Map<URI, Supplier<InputStream>> gitContentByUri = this.gitResourcesContentByUri(localGitDirectory, runContext);
 
@@ -344,7 +350,7 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
 
             URI diffFileStorageUri = this.createDiffFile(runContext, renderedNamespace, gitUriByResourceUri, beforeUpdateResourcesByUri, updatedResourcesByUri, deleted);
 
-            return output(diffFileStorageUri);
+            return output(diffFileStorageUri, commitId, commitURL);
         }
     }
 
@@ -360,7 +366,7 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
 
     protected abstract URI toUri(String renderedNamespace, T resource);
 
-    protected abstract O output(URI diffFileStorageUri);
+    protected abstract O output(URI diffFileStorageUri, String commitId, String commitURL);
 
     private UnsupportedOperationException missingOverride(String method) {
         return new UnsupportedOperationException(
@@ -378,6 +384,20 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
     @SuperBuilder
     @Getter
     public abstract static class Output implements io.kestra.core.models.tasks.Output {
+        @Schema(
+            title = "ID of the commit synced",
+            description = "HEAD of the cloned branch at the time of the sync. Null when the repository has no commit."
+        )
+        @Nullable
+        private String commitId;
+
+        @Schema(
+            title = "URL to see what’s included in the commit",
+            description = "Example format for GitHub: https://github.com/username/your_repo/commit/{commitId}"
+        )
+        @Nullable
+        private String commitURL;
+
         public abstract URI diffFileUri();
     }
 
