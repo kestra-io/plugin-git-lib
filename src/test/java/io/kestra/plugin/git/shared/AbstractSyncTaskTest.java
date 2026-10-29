@@ -34,6 +34,7 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.sameInstance;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -346,6 +347,48 @@ class AbstractSyncTaskTest {
             } else {
                 assertThat(task.getDeletedResources(), contains("/gone%20file.txt"));
             }
+        }
+    }
+
+    @Test
+    void run_outputsTipOfRequestedBranchNotDefaultBranch() throws Exception {
+        var remote = newRemoteWithDefaultBranchContent();
+        String branchTip;
+        String defaultTip;
+        try (var git = Git.open(remote.toFile())) {
+            var defaultBranch = git.getRepository().getBranch();
+            defaultTip = git.getRepository().resolve("HEAD").getName();
+            git.checkout().setCreateBranch(true).setName("release").call();
+            Files.writeString(remote.resolve("other.txt"), "other\n");
+            git.add().addFilepattern("other.txt").call();
+            branchTip = git.commit().setMessage("on release only").call().getName();
+            git.checkout().setName(defaultBranch).call();
+        }
+        assertThat(branchTip, not(defaultTip));
+
+        for (var dryRun : List.of(false, true)) {
+            var task = TestSyncTask.builder()
+                .id("sync-" + IdUtils.create())
+                .url(Property.ofValue(remote.toUri().toString()))
+                .branch(Property.ofValue("release"))
+                .dryRun(Property.ofValue(dryRun))
+                .build();
+
+            var output = task.run(runContextFactory.of());
+
+            assertThat(output.getCommitId(), is(branchTip));
+        }
+    }
+
+    /** Calls headCommit directly: a full run would first have to clone an empty remote, which is not reliable. */
+    @Test
+    void headCommit_isNullWhenRepositoryHasNoCommit() throws Exception {
+        var repository = Files.createTempDirectory("sync-task-empty-repo-");
+        try (var git = Git.init().setDirectory(repository.toFile()).call()) {
+            var headCommit = TestSyncTask.builder().build().headCommit(git, repository.toUri().toString(), "main");
+
+            assertThat(headCommit.commitId(), nullValue());
+            assertThat(headCommit.commitURL(), nullValue());
         }
     }
 
