@@ -43,6 +43,7 @@ import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.Task;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.serializers.JacksonMapper;
+import io.kestra.plugin.git.shared.services.CloneService;
 import io.kestra.plugin.git.shared.services.GitService;
 import io.kestra.plugin.git.shared.services.JGitCleanupIsolation;
 import io.kestra.plugin.git.shared.services.SshTransportConfigCallback;
@@ -589,7 +590,7 @@ public abstract class AbstractGitTask extends Task {
         String commitUrl = httpUrl + "/" + commitSubroute + "/" + commitId;
 
         if (httpUrl.contains("azure.com")) {
-            commitUrl += "?refName=refs%2Fheads%2F" + branch;
+            commitUrl += "?refName=refs%2Fheads%2F" + CloneService.shortBranchName(branch);
         }
 
         return commitUrl;

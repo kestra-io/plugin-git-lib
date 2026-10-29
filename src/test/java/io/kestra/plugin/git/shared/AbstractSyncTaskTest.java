@@ -28,6 +28,7 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.empty;
+import static org.hamcrest.Matchers.endsWith;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.hasItem;
@@ -378,6 +379,29 @@ class AbstractSyncTaskTest {
 
             assertThat(output.getCommitId(), is(branchTip));
         }
+    }
+
+    /** Azure DevOps commit URLs carry the branch: a `refs/heads/` prefixed branch must not be prefixed twice (kestra-io/plugin-git-lib#39). */
+    @Test
+    void run_outputsAzureCommitUrlWithShortBranchNameWhenBranchHasRefsHeadsPrefix() throws Exception {
+        // the remote path contains "azure.com" so that buildCommitUrl takes its Azure DevOps branch
+        var remote = Files.createDirectories(Files.createTempDirectory("sync-task-azure-").resolve("dev.azure.com").resolve("repo"));
+        try (var git = Git.init().setDirectory(remote.toFile()).call()) {
+            Files.writeString(remote.resolve("file.txt"), "hello\n");
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("init").call();
+            git.branchCreate().setName("release").call();
+        }
+
+        var task = TestSyncTask.builder()
+            .id("sync-" + IdUtils.create())
+            .url(Property.ofValue(remote.toUri().toString()))
+            .branch(Property.ofValue("refs/heads/release"))
+            .build();
+
+        var output = task.run(runContextFactory.of());
+
+        assertThat(output.getCommitURL(), endsWith("?refName=refs%2Fheads%2Frelease"));
     }
 
     /** Calls headCommit directly: a full run would first have to clone an empty remote, which is not reliable. */

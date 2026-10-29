@@ -107,4 +107,49 @@ class GitServiceTest {
 
         gitService.ensureBranchExistsOrFail(runContext, defaultBranch, true);
     }
+
+    @Test
+    void ensureBranchExistsOrFail_passesWhenBranchHasRefsHeadsPrefix() throws Exception {
+        Path remote = Files.createTempDirectory("git-service-remote-");
+        String defaultBranch;
+        try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
+            Files.writeString(remote.resolve("file.txt"), "hello\n");
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("init").call();
+            defaultBranch = git.getRepository().getBranch();
+        }
+
+        RunContext runContext = runContextFactory.of();
+        GitService gitService = new GitService(TestCloningTask.builder().url(Property.ofValue(remote.toUri().toString())).build());
+
+        gitService.ensureBranchExistsOrFail(runContext, "refs/heads/" + defaultBranch, true);
+    }
+
+    @Test
+    void cloneBranch_checksOutBranchWhenBranchHasRefsHeadsPrefix() throws Exception {
+        Path remote = Files.createTempDirectory("git-service-remote-");
+        String defaultBranch;
+        try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
+            Files.writeString(remote.resolve("file.txt"), "hello\n");
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("init").call();
+            defaultBranch = git.getRepository().getBranch();
+
+            git.checkout().setCreateBranch(true).setName("feature/x").call();
+            Files.writeString(remote.resolve("feature.txt"), "feature\n");
+            git.add().addFilepattern("feature.txt").call();
+            git.commit().setMessage("feature").call();
+
+            git.checkout().setName(defaultBranch).call();
+        }
+
+        RunContext runContext = runContextFactory.of();
+        var gitTask = TestCloningTask.builder().url(Property.ofValue(remote.toUri().toString())).build();
+        var gitService = new GitService(gitTask);
+
+        try (Git git = gitService.cloneBranch(runContext, "refs/heads/feature/x", null)) {
+            assertThat(git.getRepository().getBranch(), is("feature/x"));
+            assertThat(Files.exists(runContext.workingDir().path().resolve("feature.txt")), is(true));
+        }
+    }
 }

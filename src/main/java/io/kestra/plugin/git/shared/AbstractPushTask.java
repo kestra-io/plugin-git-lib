@@ -33,6 +33,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.kestra.core.exceptions.IllegalVariableEvaluationException;
 import io.kestra.core.exceptions.KestraRuntimeException;
+import io.kestra.plugin.git.shared.services.CloneService;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
@@ -333,7 +334,7 @@ public abstract class AbstractPushTask<O extends AbstractPushTask.Output> extend
                     httpUrl
                 );
             } else {
-                String renderedBranch = runContext.render(this.getBranch()).as(String.class).orElse(null);
+                String renderedBranch = CloneService.shortBranchName(runContext.render(this.getBranch()).as(String.class).orElse(null));
                 logger.info(
                     "Pushing to {} on branch {}",
                     httpUrl,
