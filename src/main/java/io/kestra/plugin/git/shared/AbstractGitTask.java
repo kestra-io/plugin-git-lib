@@ -43,6 +43,7 @@ import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.Task;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.serializers.JacksonMapper;
+import io.kestra.plugin.git.shared.services.GitService;
 import io.kestra.plugin.git.shared.services.JGitCleanupIsolation;
 import io.kestra.plugin.git.shared.services.SshTransportConfigCallback;
 
@@ -563,6 +564,16 @@ public abstract class AbstractGitTask extends Task {
         return diffEntry.getChangeType() == DiffEntry.ChangeType.DELETE
             ? diffEntry.getOldPath()
             : diffEntry.getNewPath();
+    }
+
+    protected HeadCommit headCommit(Git git, String url, String branch) throws IOException {
+        var head = git.getRepository().resolve(Constants.HEAD);
+        var commitId = head == null ? null : head.getName();
+        return new HeadCommit(commitId, buildCommitUrl(new GitService(this).getHttpUrl(url), branch, commitId));
+    }
+
+    /** HEAD of a clone; both values are null when the repository has no commit. */
+    public record HeadCommit(String commitId, String commitURL) {
     }
 
     protected String buildCommitUrl(String httpUrl, String branch, String commitId) {

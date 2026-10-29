@@ -271,8 +271,8 @@ public final class TestTasks {
         }
 
         @Override
-        protected Output output(URI diffFileStorageUri) {
-            return Output.builder().diffFileUri(diffFileStorageUri).build();
+        protected Output output(URI diffFileStorageUri, String commitId, String commitURL) {
+            return Output.builder().diffFileUri(diffFileStorageUri).commitId(commitId).commitURL(commitURL).build();
         }
 
         @SuperBuilder
