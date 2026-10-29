@@ -34,6 +34,7 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.sameInstance;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -376,6 +377,18 @@ class AbstractSyncTaskTest {
             var output = task.run(runContextFactory.of());
 
             assertThat(output.getCommitId(), is(branchTip));
+        }
+    }
+
+    /** Calls headCommit directly: a full run would first have to clone an empty remote, which is not reliable. */
+    @Test
+    void headCommit_isNullWhenRepositoryHasNoCommit() throws Exception {
+        var repository = Files.createTempDirectory("sync-task-empty-repo-");
+        try (var git = Git.init().setDirectory(repository.toFile()).call()) {
+            var headCommit = TestSyncTask.builder().build().headCommit(git, repository.toUri().toString(), "main");
+
+            assertThat(headCommit.commitId(), nullValue());
+            assertThat(headCommit.commitURL(), nullValue());
         }
     }
 
