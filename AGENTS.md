@@ -33,6 +33,8 @@ Single-module library, `io.kestra.gradle.repository-conventions` + `com.vannikte
   it is consumed by the OSS plugin too.
 - Owns the `api` jgit dependencies (`org.eclipse.jgit`, `org.eclipse.jgit.ssh.jsch`, `org.eclipse.jgit.http.apache`)
   and `io.kestra:kestra-api-client`, so both editions stop drifting on those versions — bump them here once.
+  `org.eclipse.jgit.ssh.jsch` runs on the maintained `com.github.mwiede:jsch` fork (same `com.jcraft.jsch` package),
+  with the unmaintained `com.jcraft:jsch` excluded: the latter cannot negotiate `rsa-sha2-256/512`.
 - Both plugin repos consume it as `api 'io.kestra.plugin:plugin-git-lib:<version>'` and continue shipping it inside
   their own `shadowJar`.
 
