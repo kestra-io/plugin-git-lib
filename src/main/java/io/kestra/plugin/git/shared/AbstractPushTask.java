@@ -153,7 +153,8 @@ public abstract class AbstractPushTask<O extends AbstractPushTask.Output> extend
 
         var keep = new HashSet<String>();
         for (var k : contentByPath.keySet()) {
-            var rel = (prefix.isEmpty() ? baseDir.relativize(k.normalize()) : Path.of(prefix).resolve(baseDir.relativize(k.normalize())))
+            var relPath = basePath.relativize(k.normalize());
+            var rel = (prefix.isEmpty() ? relPath : Path.of(prefix).resolve(relPath))
                 .toString().replace(File.separatorChar, '/');
             keep.add(rel);
         }

@@ -464,4 +464,33 @@ class AbstractPushTaskTest {
         assertThat(output.getCommitId(), notNullValue());
         assertThat(readLastCommitMessage(remote), is("Deploying flow my-flow"));
     }
+
+    // macOS temp dirs go through /var -> /private/var, which made deleteOutdatedResources drop freshly written files.
+    @Test
+    void delete_gitDirectoryThroughSymlink_keepsPushedFiles() throws Exception {
+        var remote = Files.createTempDirectory("push-task-remote-");
+        try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
+            git.getRepository().updateRef(Constants.HEAD).link("refs/heads/main");
+            git.getRepository().getConfig().setString("receive", null, "denyCurrentBranch", "ignore");
+            git.getRepository().getConfig().save();
+
+            Files.createDirectory(remote.resolve("real"));
+            Files.writeString(remote.resolve("real/existing.txt"), "hello\n");
+            Files.createSymbolicLink(remote.resolve("link"), Path.of("real"));
+            git.add().addFilepattern("real").addFilepattern("link").call();
+            git.commit().setMessage("init").call();
+        }
+        var runContext = runContextFactory.of();
+
+        var task = TestPushTask.builder()
+            .url(Property.ofValue(remote.toUri().toString()))
+            .gitDirectory(Property.ofValue("link"))
+            .filesToWrite(Map.of("existing.txt", "updated\n"))
+            .build();
+
+        var output = task.run(runContext);
+
+        assertThat(output.getCommitId(), notNullValue());
+        assertThat(readPushedFileContent(remote, "real/existing.txt"), is("updated\n"));
+    }
 }
