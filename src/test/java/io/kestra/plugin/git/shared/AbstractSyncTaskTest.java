@@ -28,8 +28,8 @@ import jakarta.inject.Inject;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
-import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.containsInAnyOrder;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.endsWith;
 import static org.hamcrest.Matchers.greaterThan;
@@ -428,10 +428,10 @@ class AbstractSyncTaskTest {
     }
 
     private Path newRemoteWith(Map<String, String> files) throws Exception {
-        Path remote = Files.createTempDirectory("sync-task-remote-dupes-");
+        var remote = Files.createTempDirectory("sync-task-remote-dupes-");
         try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
             for (var file : files.entrySet()) {
-                Path target = remote.resolve(file.getKey());
+                var target = remote.resolve(file.getKey());
                 Files.createDirectories(target.getParent());
                 Files.writeString(target, file.getValue());
             }
@@ -489,13 +489,23 @@ class AbstractSyncTaskTest {
     }
 
     @Test
-    void run_skipsCheckWhenHookReturnsEmpty() throws Exception {
+    void run_defaultHookKeepsPreviousBehaviour() throws Exception {
         Path remote = newRemoteWith(Map.of("a/x.yml", "id: x\n", "a/x.yml.bak", "id: x\n"));
         var task = TestSyncTask.builder().url(Property.ofValue(remote.toUri().toString())).build();
 
         task.run(runContextFactory.of());
 
         assertThat(task.getWrittenPaths(), hasItems("/a/x.yml", "/a/x.yml.bak"));
+    }
+
+    @Test
+    void run_skipsFilesWhoseKeyIsEmpty() throws Exception {
+        Path remote = newRemoteWith(Map.of("a/one.yml", "v: 1\n", "a/two.yml", "v: 2\n", "a/keyed.yml", "id: k\n"));
+        var task = TestKeyedSyncTask.builder().url(Property.ofValue(remote.toUri().toString())).build();
+
+        task.run(runContextFactory.of());
+
+        assertThat(task.getWrittenPaths(), hasItems("/a/one.yml", "/a/two.yml", "/a/keyed.yml"));
     }
 
     @Test

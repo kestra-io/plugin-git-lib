@@ -178,21 +178,21 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
     /** Fails, before anything is written or deleted, when two or more Git files resolve to the same resource key. */
     private void failOnDuplicateResources(RunContext runContext, String renderedNamespace, Map<URI, Supplier<InputStream>> gitContentByUri)
         throws IOException, IllegalVariableEvaluationException {
-        String renderedGitDirectory = runContext.render(this.getGitDirectory()).as(String.class).orElse(null);
-        Map<URI, Set<String>> gitPathsByKey = new TreeMap<>();
+        var rGitDirectory = runContext.render(this.getGitDirectory()).as(String.class).orElse(null);
+        var gitPathsByKey = new TreeMap<URI, Set<String>>();
 
-        for (Map.Entry<URI, Supplier<InputStream>> entry : gitContentByUri.entrySet()) {
+        for (var entry : gitContentByUri.entrySet()) {
             // Each get() opens a new stream, so this does not consume the one used later by the write.
-            try (InputStream content = entry.getValue().get()) {
+            try (var content = entry.getValue().get()) {
                 if (content == null) {
                     continue;
                 }
                 this.resourceKey(runContext, renderedNamespace, entry.getKey(), content)
-                    .ifPresent(key -> gitPathsByKey.computeIfAbsent(key, k -> new TreeSet<>()).add(gitPath(renderedGitDirectory, entry.getKey())));
+                    .ifPresent(key -> gitPathsByKey.computeIfAbsent(key, k -> new TreeSet<>()).add(gitPath(rGitDirectory, entry.getKey())));
             }
         }
 
-        String conflicts = gitPathsByKey.entrySet().stream()
+        var conflicts = gitPathsByKey.entrySet().stream()
             .filter(e -> e.getValue().size() > 1)
             .map(e -> " - " + e.getKey() + ": " + String.join(", ", e.getValue()))
             .collect(Collectors.joining("\n"));

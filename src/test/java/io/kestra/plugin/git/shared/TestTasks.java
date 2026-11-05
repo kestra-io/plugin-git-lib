@@ -301,7 +301,7 @@ public final class TestTasks {
     public static class TestKeyedSyncTask extends TestSyncTask {
         @Override
         protected Optional<URI> resourceKey(RunContext runContext, String renderedNamespace, URI gitUri, InputStream content) throws IOException {
-            String id = new String(content.readAllBytes(), StandardCharsets.UTF_8).lines()
+            var id = new String(content.readAllBytes(), StandardCharsets.UTF_8).lines()
                 .filter(line -> line.startsWith("id:"))
                 .map(line -> line.substring(3).trim())
                 .findFirst()
@@ -309,8 +309,8 @@ public final class TestTasks {
             if (id == null) {
                 return Optional.empty();
             }
-            String path = gitUri.getPath();
-            String dir = path.substring(0, path.lastIndexOf('/'));
+            var path = gitUri.getPath();
+            var dir = path.substring(0, path.lastIndexOf('/'));
             return Optional.of(URI.create(dir + "/" + id));
         }
     }
