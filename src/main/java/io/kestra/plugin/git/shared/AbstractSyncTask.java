@@ -161,6 +161,49 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
         return renderedGitDirectory + resourceUri.getPath();
     }
 
+    /**
+     * The key of the resource a Git file would be written to, in the same URI space as {@link #toUri}.
+     *
+     * <p>Used to fail before any write when several Git files resolve to the same resource. Returning empty skips the
+     * check for that file, for instance when it cannot be parsed (the write phase keeps reporting it as today).
+     * Defaults to empty, so subclasses that do not override it are unchanged.
+     *
+     * @param content a fresh stream of the file, closed by the caller; never called for directories
+     */
+    protected Optional<URI> resourceKey(RunContext runContext, String renderedNamespace, URI gitUri, InputStream content)
+        throws IOException, IllegalVariableEvaluationException {
+        return Optional.empty();
+    }
+
+    /** Fails, before anything is written or deleted, when two or more Git files resolve to the same resource key. */
+    private void failOnDuplicateResources(RunContext runContext, String renderedNamespace, Map<URI, Supplier<InputStream>> gitContentByUri)
+        throws IOException, IllegalVariableEvaluationException {
+        String renderedGitDirectory = runContext.render(this.getGitDirectory()).as(String.class).orElse(null);
+        Map<URI, Set<String>> gitPathsByKey = new TreeMap<>();
+
+        for (Map.Entry<URI, Supplier<InputStream>> entry : gitContentByUri.entrySet()) {
+            // Each get() opens a new stream, so this does not consume the one used later by the write.
+            try (InputStream content = entry.getValue().get()) {
+                if (content == null) {
+                    continue;
+                }
+                this.resourceKey(runContext, renderedNamespace, entry.getKey(), content)
+                    .ifPresent(key -> gitPathsByKey.computeIfAbsent(key, k -> new TreeSet<>()).add(gitPath(renderedGitDirectory, entry.getKey())));
+            }
+        }
+
+        String conflicts = gitPathsByKey.entrySet().stream()
+            .filter(e -> e.getValue().size() > 1)
+            .map(e -> " - " + e.getKey() + ": " + String.join(", ", e.getValue()))
+            .collect(Collectors.joining("\n"));
+
+        if (!conflicts.isEmpty()) {
+            throw new IllegalArgumentException(
+                "Several Git files resolve to the same resource, which would write it more than once with an unpredictable result. Keep one file per resource:\n" + conflicts
+            );
+        }
+    }
+
     protected Property<Boolean> traverseDirectories() {
         return Property.ofValue(true);
     }
@@ -288,6 +331,7 @@ public abstract class AbstractSyncTask<T, O extends AbstractSyncTask.Output> ext
             Map<URI, Supplier<InputStream>> gitContentByUri = this.gitResourcesContentByUri(localGitDirectory, runContext);
 
             String renderedNamespace = runContext.render(this.fetchedNamespace()).as(String.class).orElse(null);
+            this.failOnDuplicateResources(runContext, renderedNamespace, gitContentByUri);
             RunState runState = this.newRunState();
 
             Map<URI, T> beforeUpdateResourcesByUri = this.fetchResources(runContext, renderedNamespace, runState)

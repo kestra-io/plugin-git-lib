@@ -4,6 +4,7 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -18,6 +19,7 @@ import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextFactory;
 import io.kestra.core.utils.IdUtils;
 import io.kestra.plugin.git.shared.AbstractSyncTask.RunState;
+import io.kestra.plugin.git.shared.TestTasks.TestKeyedSyncTask;
 import io.kestra.plugin.git.shared.TestTasks.TestStatefulSyncTask;
 import io.kestra.plugin.git.shared.TestTasks.TestStatefulSyncTask.TestRunState;
 import io.kestra.plugin.git.shared.TestTasks.TestSyncTask;
@@ -26,6 +28,7 @@ import jakarta.inject.Inject;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.endsWith;
@@ -422,5 +425,87 @@ class AbstractSyncTaskTest {
         assertThat(encoded.toString(), is("/tasks/merge_one%20copy.yml"));
         assertThat(TestSyncTask.gitPath("_files", encoded), is("_files/tasks/merge_one copy.yml"));
         assertThat(TestSyncTask.gitPath("_files", URI.create("/tasks/plain.yml")), is("_files/tasks/plain.yml"));
+    }
+
+    private Path newRemoteWith(Map<String, String> files) throws Exception {
+        Path remote = Files.createTempDirectory("sync-task-remote-dupes-");
+        try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
+            for (var file : files.entrySet()) {
+                Path target = remote.resolve(file.getKey());
+                Files.createDirectories(target.getParent());
+                Files.writeString(target, file.getValue());
+            }
+            git.add().addFilepattern(".").call();
+            git.commit().setMessage("init").call();
+            git.branchCreate().setName("main").call();
+        }
+        return remote;
+    }
+
+    @Test
+    void run_failsBeforeWritingWhenTwoFilesResolveToSameResource() throws Exception {
+        Path remote = newRemoteWith(Map.of("a/x.yml", "id: x\nv: new\n", "a/x.yml.bak", "id: x\nv: old\n"));
+
+        for (var dryRun : List.of(false, true)) {
+            var task = TestKeyedSyncTask.builder()
+                .url(Property.ofValue(remote.toUri().toString()))
+                .dryRun(Property.ofValue(dryRun))
+                .delete(Property.ofValue(true))
+                .existingResources(List.of("/stale-resource"))
+                .build();
+
+            var e = assertThrows(IllegalArgumentException.class, () -> task.run(runContextFactory.of()));
+
+            assertThat(e.getMessage(), containsString(" - /a/x: ./a/x.yml, ./a/x.yml.bak"));
+            assertThat(task.getWrittenPaths(), empty());
+            assertThat(task.getDeletedResources(), empty());
+        }
+    }
+
+    @Test
+    void run_reportsEveryDuplicateGroup() throws Exception {
+        Path remote = newRemoteWith(Map.of(
+            "b/y.yml", "id: y\n", "b/y2.yml", "id: y\n",
+            "a/x.yml", "id: x\n", "a/x.yml.bak", "id: x\n", "a/x_v1.yml", "id: x\n",
+            "c/z.yml", "id: z\n"
+        ));
+        var task = TestKeyedSyncTask.builder().url(Property.ofValue(remote.toUri().toString())).build();
+
+        var e = assertThrows(IllegalArgumentException.class, () -> task.run(runContextFactory.of()));
+
+        assertThat(e.getMessage(), containsString(" - /a/x: ./a/x.yml, ./a/x.yml.bak, ./a/x_v1.yml\n - /b/y: ./b/y.yml, ./b/y2.yml"));
+        assertThat(e.getMessage(), not(containsString("/c/z")));
+        assertThat(task.getWrittenPaths(), empty());
+    }
+
+    @Test
+    void run_allowsSameIdInDifferentFolders() throws Exception {
+        Path remote = newRemoteWith(Map.of("a/x.yml", "id: x\n", "b/x.yml", "id: x\n"));
+        var task = TestKeyedSyncTask.builder().url(Property.ofValue(remote.toUri().toString())).build();
+
+        task.run(runContextFactory.of());
+
+        assertThat(task.getWrittenPaths(), hasItems("/a/x.yml", "/b/x.yml"));
+    }
+
+    @Test
+    void run_skipsCheckWhenHookReturnsEmpty() throws Exception {
+        Path remote = newRemoteWith(Map.of("a/x.yml", "id: x\n", "a/x.yml.bak", "id: x\n"));
+        var task = TestSyncTask.builder().url(Property.ofValue(remote.toUri().toString())).build();
+
+        task.run(runContextFactory.of());
+
+        assertThat(task.getWrittenPaths(), hasItems("/a/x.yml", "/a/x.yml.bak"));
+    }
+
+    @Test
+    void run_decodedPathsInDuplicateMessage() throws Exception {
+        Path remote = newRemoteWith(Map.of("a/x.yml", "id: x\n", "a/x copy.yml", "id: x\n"));
+        var task = TestKeyedSyncTask.builder().url(Property.ofValue(remote.toUri().toString())).build();
+
+        var e = assertThrows(IllegalArgumentException.class, () -> task.run(runContextFactory.of()));
+
+        assertThat(e.getMessage(), containsString("./a/x copy.yml, ./a/x.yml"));
+        assertThat(e.getMessage(), not(containsString("%20")));
     }
 }

@@ -1,6 +1,7 @@
 package io.kestra.plugin.git.shared;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -8,6 +9,7 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Supplier;
 
@@ -284,6 +286,32 @@ public final class TestTasks {
             public URI diffFileUri() {
                 return diffFileUri;
             }
+        }
+    }
+
+    /**
+     * A {@link TestSyncTask} resolving each file to the resource {@code <folder>/<id>}, the id being read from an
+     * {@code id: <x>} line of the content (mimics namespace-from-folder + id-from-content of the flow sync).
+     */
+    @SuperBuilder(toBuilder = true)
+    @ToString
+    @EqualsAndHashCode(callSuper = true)
+    @Getter
+    @NoArgsConstructor
+    public static class TestKeyedSyncTask extends TestSyncTask {
+        @Override
+        protected Optional<URI> resourceKey(RunContext runContext, String renderedNamespace, URI gitUri, InputStream content) throws IOException {
+            String id = new String(content.readAllBytes(), StandardCharsets.UTF_8).lines()
+                .filter(line -> line.startsWith("id:"))
+                .map(line -> line.substring(3).trim())
+                .findFirst()
+                .orElse(null);
+            if (id == null) {
+                return Optional.empty();
+            }
+            String path = gitUri.getPath();
+            String dir = path.substring(0, path.lastIndexOf('/'));
+            return Optional.of(URI.create(dir + "/" + id));
         }
     }
 
