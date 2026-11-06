@@ -50,7 +50,7 @@ class AbstractSyncTaskTest {
 
     private Path newRemoteWithDefaultBranchContent() throws Exception {
         Path remote = Files.createTempDirectory("sync-task-remote-");
-        try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
+        try (var git = Git.init().setDirectory(remote.toFile()).call()) {
             Files.writeString(remote.resolve("file.txt"), "hello\n");
             git.add().addFilepattern("file.txt").call();
             git.commit().setMessage("init").call();
@@ -323,7 +323,7 @@ class AbstractSyncTaskTest {
     @Test
     void run_syncsRepositoryContainingFileNamesWithSpecialCharacters() throws Exception {
         Path remote = Files.createTempDirectory("sync-task-remote-special-");
-        try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
+        try (var git = Git.init().setDirectory(remote.toFile()).call()) {
             Files.createDirectories(remote.resolve("tasks"));
             Files.writeString(remote.resolve("tasks").resolve("merge_one copy.yml"), "id: a\n");
             Files.writeString(remote.resolve("a#b[1].txt"), "x\n");
@@ -429,7 +429,7 @@ class AbstractSyncTaskTest {
 
     private Path newRemoteWith(Map<String, String> files) throws Exception {
         var remote = Files.createTempDirectory("sync-task-remote-dupes-");
-        try (Git git = Git.init().setDirectory(remote.toFile()).call()) {
+        try (var git = Git.init().setDirectory(remote.toFile()).call()) {
             for (var file : files.entrySet()) {
                 var target = remote.resolve(file.getKey());
                 Files.createDirectories(target.getParent());
@@ -444,7 +444,7 @@ class AbstractSyncTaskTest {
 
     @Test
     void run_failsBeforeWritingWhenTwoFilesResolveToSameResource() throws Exception {
-        Path remote = newRemoteWith(Map.of("a/x.yml", "id: x\nv: new\n", "a/x.yml.bak", "id: x\nv: old\n"));
+        var remote = newRemoteWith(Map.of("a/x.yml", "id: x\nv: new\n", "a/x.yml.bak", "id: x\nv: old\n"));
 
         for (var dryRun : List.of(false, true)) {
             var task = TestKeyedSyncTask.builder()
@@ -464,7 +464,7 @@ class AbstractSyncTaskTest {
 
     @Test
     void run_reportsEveryDuplicateGroup() throws Exception {
-        Path remote = newRemoteWith(Map.of(
+        var remote = newRemoteWith(Map.of(
             "b/y.yml", "id: y\n", "b/y2.yml", "id: y\n",
             "a/x.yml", "id: x\n", "a/x.yml.bak", "id: x\n", "a/x_v1.yml", "id: x\n",
             "c/z.yml", "id: z\n"
@@ -480,7 +480,7 @@ class AbstractSyncTaskTest {
 
     @Test
     void run_allowsSameIdInDifferentFolders() throws Exception {
-        Path remote = newRemoteWith(Map.of("a/x.yml", "id: x\n", "b/x.yml", "id: x\n"));
+        var remote = newRemoteWith(Map.of("a/x.yml", "id: x\n", "b/x.yml", "id: x\n"));
         var task = TestKeyedSyncTask.builder().url(Property.ofValue(remote.toUri().toString())).build();
 
         task.run(runContextFactory.of());
@@ -490,7 +490,7 @@ class AbstractSyncTaskTest {
 
     @Test
     void run_defaultHookKeepsPreviousBehaviour() throws Exception {
-        Path remote = newRemoteWith(Map.of("a/x.yml", "id: x\n", "a/x.yml.bak", "id: x\n"));
+        var remote = newRemoteWith(Map.of("a/x.yml", "id: x\n", "a/x.yml.bak", "id: x\n"));
         var task = TestSyncTask.builder().url(Property.ofValue(remote.toUri().toString())).build();
 
         task.run(runContextFactory.of());
@@ -500,7 +500,7 @@ class AbstractSyncTaskTest {
 
     @Test
     void run_skipsFilesWhoseKeyIsEmpty() throws Exception {
-        Path remote = newRemoteWith(Map.of("a/one.yml", "v: 1\n", "a/two.yml", "v: 2\n", "a/keyed.yml", "id: k\n"));
+        var remote = newRemoteWith(Map.of("a/one.yml", "v: 1\n", "a/two.yml", "v: 2\n", "a/keyed.yml", "id: k\n"));
         var task = TestKeyedSyncTask.builder().url(Property.ofValue(remote.toUri().toString())).build();
 
         task.run(runContextFactory.of());
@@ -510,7 +510,7 @@ class AbstractSyncTaskTest {
 
     @Test
     void run_decodedPathsInDuplicateMessage() throws Exception {
-        Path remote = newRemoteWith(Map.of("a/x.yml", "id: x\n", "a/x copy.yml", "id: x\n"));
+        var remote = newRemoteWith(Map.of("a/x.yml", "id: x\n", "a/x copy.yml", "id: x\n"));
         var task = TestKeyedSyncTask.builder().url(Property.ofValue(remote.toUri().toString())).build();
 
         var e = assertThrows(IllegalArgumentException.class, () -> task.run(runContextFactory.of()));
