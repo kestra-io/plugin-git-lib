@@ -54,9 +54,9 @@ dependencies {
     // to suppress JGit's JVM shutdown hook (issue #23). That internal API has no compatibility contract, so on any
     // JGit bump re-run JGitShutdownRaceTest — it is the canary for both the mechanism (hook still suppressible)
     // and each failure mode (checkout index lock, fetch/partial-clone cleanup) — before releasing.
-    api 'org.eclipse.jgit:org.eclipse.jgit:7.8.0.202609011348-r'
-    api 'org.eclipse.jgit:org.eclipse.jgit.ssh.jsch:7.8.0.202609011348-r'
-    api "org.eclipse.jgit:org.eclipse.jgit.http.apache:7.8.0.202609011348-r"
+    api 'org.eclipse.jgit:org.eclipse.jgit:7.8.1.202611041320-r'
+    api 'org.eclipse.jgit:org.eclipse.jgit.ssh.jsch:7.8.1.202611041320-r'
+    api "org.eclipse.jgit:org.eclipse.jgit.http.apache:7.8.1.202611041320-r"
 
     // kestra API client: exposed as api since consumers build KestraClient instances from the lib's classes.
     // Versioned separately from kestraVersion, it has its own release cadence and is absent from the platform BOM.
@@ -114,9 +114,9 @@ dependencies {
     testImplementation "org.hamcrest:hamcrest"
     testImplementation "org.hamcrest:hamcrest-library"
     testImplementation "ch.qos.logback:logback-classic"
-    testImplementation "org.eclipse.jgit:org.eclipse.jgit.http.server:7.8.0.202609011348-r"
-    testImplementation "org.eclipse.jetty:jetty-server:12.0.36"
-    testImplementation "org.eclipse.jetty.ee10:jetty-ee10-servlet:12.0.36"
+    testImplementation "org.eclipse.jgit:org.eclipse.jgit.http.server:7.8.1.202611041320-r"
+    testImplementation "org.eclipse.jetty:jetty-server:12.1.14"
+    testImplementation "org.eclipse.jetty.ee10:jetty-ee10-servlet:12.1.14"
 }
 
 /**********************************************************************************************************************\
