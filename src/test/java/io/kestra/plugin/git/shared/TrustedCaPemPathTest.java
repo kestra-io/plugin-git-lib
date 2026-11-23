@@ -76,7 +76,9 @@ class TrustedCaPemPathTest {
             exchange.close();
         });
         server.start();
-        url = "https://localhost:" + server.getAddress().getPort();
+        // Literal IP: where localhost also resolves to ::1 (CI runners), httpclient retries a failed handshake on
+        // the next address and reports that connect error instead of the SSLHandshakeException.
+        url = "https://127.0.0.1:" + server.getAddress().getPort();
     }
 
     private static KeyStore selfSignedKeyStore(Path keystore) throws Exception {
