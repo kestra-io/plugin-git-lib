@@ -3,6 +3,8 @@ package io.kestra.plugin.git.shared;
 import java.util.Optional;
 import java.util.function.Predicate;
 
+import javax.net.ssl.SSLHandshakeException;
+
 import io.kestra.core.exceptions.IllegalVariableEvaluationException;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.runners.RunContext;
@@ -140,6 +142,23 @@ final class KestraApiConnection {
         }
 
         return builder.noAuth().build();
+    }
+
+    /**
+     * Throws a message naming the Kestra API call, instead of the raw TLS error that reads as a Git remote failure,
+     * when {@code error} has an {@link SSLHandshakeException} in its cause chain; does nothing otherwise.
+     */
+    static void failOnUntrustedCertificate(RunContext runContext, @Nullable Property<String> kestraUrl, @Nullable KestraApiAuth auth, Throwable error) throws IllegalVariableEvaluationException {
+        for (Throwable cause = error; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
+            if (cause instanceof SSLHandshakeException) {
+                throw new IllegalStateException(
+                    "Could not connect to the Kestra API at " + resolve(runContext, kestraUrl, auth).url() + ": its server certificate is not trusted by the JVM truststore. "
+                        + "This is the call to the Kestra API, not to the Git remote. Set `kestraUrl` to a URL whose certificate is trusted, "
+                        + "or add the issuing CA to the JVM truststore (`-Djavax.net.ssl.trustStore` in `JAVA_OPTS`). Cause: " + cause.getMessage(),
+                    error
+                );
+            }
+        }
     }
 
     /**

@@ -1,8 +1,11 @@
 package io.kestra.plugin.git.shared;
 
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.util.Map;
 import java.util.Optional;
+
+import javax.net.ssl.SSLHandshakeException;
 
 import org.junit.jupiter.api.Test;
 
@@ -21,6 +24,7 @@ import io.kestra.sdk.internal.ApiClient;
 import jakarta.inject.Inject;
 
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.startsWith;
@@ -291,5 +295,30 @@ class KestraApiConnectionTest {
         task.auth = AbstractCloningTask.Auth.builder().auto(Property.ofValue(false)).build();
 
         assertThat(authorizationHeader(task.kestraClient(runContextFactory.of())), nullValue());
+    }
+
+    @Test
+    void shouldExplainAnUntrustedKestraApiCertificate() throws Exception {
+        var task = cloningTask().kestraUrl(Property.ofValue("https://kestra.internal/")).build();
+        var tlsError = new SSLHandshakeException("PKIX path building failed");
+        var wrapped = new RuntimeException("call failed", new IOException(tlsError));
+
+        var thrown = assertThrows(
+            IllegalStateException.class,
+            () -> task.failOnUntrustedKestraCertificate(runContextWithSdkUrl(task, SDK_DEFAULT_URL), wrapped)
+        );
+
+        assertThat(thrown.getMessage(), containsString("https://kestra.internal"));
+        assertThat(thrown.getMessage(), containsString("not to the Git remote"));
+        assertThat(thrown.getMessage(), containsString("PKIX path building failed"));
+        assertThat(thrown.getCause(), is(wrapped));
+    }
+
+    @Test
+    void shouldIgnoreErrorsThatAreNotCertificateFailures() throws Exception {
+        var task = cloningTask().build();
+        var runContext = runContextWithSdkUrl(task, SDK_DEFAULT_URL);
+
+        task.failOnUntrustedKestraCertificate(runContext, new IOException("connection refused"));
     }
 }
