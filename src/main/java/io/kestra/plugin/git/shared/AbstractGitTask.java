@@ -5,7 +5,9 @@ import java.net.Proxy;
 import java.net.URI;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.security.KeyStore;
 import java.security.MessageDigest;
@@ -167,7 +169,7 @@ public abstract class AbstractGitTask extends Task {
         description = """
             Optional PEM-encoded CA bundle, trusted in addition to the JVM truststore for HTTPS connections to the \
             Kestra API (`kestraUrl`) and to the Git remote. Equivalent to `git config http.sslCAInfo <path>` for \
-            self-signed or internal CAs."""
+            self-signed or internal CAs. `NamespaceSync` and `TenantSync` do not apply it to the Git remote yet."""
     )
     @PluginProperty(group = "advanced")
     protected Property<String> trustedCaPemPath;
@@ -313,9 +315,15 @@ public abstract class AbstractGitTask extends Task {
         try {
             return Optional.of(buildSslContext(rPemPath.get()));
         } catch (Exception e) {
+            // For these two, getMessage() is only the path, which the message already names
+            var reason = switch (e) {
+                case NoSuchFileException ignored -> "file not found";
+                case AccessDeniedException ignored -> "permission denied";
+                default -> e.getMessage();
+            };
             throw new IllegalArgumentException(
-                "Cannot load the CA certificates from `trustedCaPemPath` '" + rPemPath.get() + "': " + e.getMessage()
-                    + ". Check that the file exists on the worker and contains PEM-encoded certificates.", e);
+                "Cannot load the CA certificates from `trustedCaPemPath` '" + rPemPath.get() + "': " + reason
+                    + ". Check that the file exists on the worker, is readable, and contains PEM-encoded certificates.", e);
         }
     }
 

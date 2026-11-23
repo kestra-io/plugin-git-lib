@@ -80,19 +80,19 @@ class TrustedCaPemPathTest {
     }
 
     private static KeyStore selfSignedKeyStore(Path keystore) throws Exception {
+        var log = keystore.resolveSibling(keystore.getFileName() + ".log");
         var process = new ProcessBuilder(
             Path.of(System.getProperty("java.home"), "bin", "keytool").toString(),
             "-genkeypair", "-alias", "server", "-keyalg", "RSA", "-keysize", "2048",
             "-dname", "CN=localhost", "-ext", "SAN=dns:localhost,ip:127.0.0.1",
             "-validity", "2", "-storetype", "PKCS12",
             "-keystore", keystore.toString(), "-storepass", new String(PASSWORD)
-        ).redirectErrorStream(true).redirectInput(ProcessBuilder.Redirect.from(new File("/dev/null"))).start();
-        var output = new String(process.getInputStream().readAllBytes());
+        ).redirectErrorStream(true).redirectOutput(log.toFile()).redirectInput(ProcessBuilder.Redirect.from(new File("/dev/null"))).start();
         if (!process.waitFor(120, TimeUnit.SECONDS)) {
             process.destroyForcibly().waitFor(10, TimeUnit.SECONDS);
-            fail("keytool did not finish within 120s: " + output);
+            fail("keytool did not finish within 120s: " + Files.readString(log));
         }
-        assertThat(output, process.exitValue(), is(0));
+        assertThat(Files.readString(log), process.exitValue(), is(0));
 
         var keyStore = KeyStore.getInstance("PKCS12");
         try (InputStream in = Files.newInputStream(keystore)) {
@@ -196,7 +196,7 @@ class TrustedCaPemPathTest {
 
         var e = assertThrows(IllegalArgumentException.class, () -> task.trustedCaSslContext(runContext(task)));
 
-        assertThat(e.getMessage(), containsString(missing));
+        assertThat(e.getMessage(), containsString("'" + missing + "': file not found. Check that"));
     }
 
     @Test
