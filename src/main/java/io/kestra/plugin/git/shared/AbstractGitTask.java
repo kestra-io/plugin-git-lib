@@ -39,6 +39,7 @@ import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import io.kestra.core.exceptions.IllegalVariableEvaluationException;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.Task;
 import io.kestra.core.runners.RunContext;
@@ -163,7 +164,7 @@ public abstract class AbstractGitTask extends Task {
 
     @Schema(
         title = "Extra trusted CA PEM path",
-        description = "Optional PEM-encoded CA bundle added to the JVM truststore; equivalent to `git config http.sslCAInfo <path>` for self-signed or internal CAs."
+        description = "Optional PEM-encoded CA bundle trusted, in addition to the JVM truststore, for both the Git remote and the Kestra API (`kestraUrl`); equivalent to `git config http.sslCAInfo <path>` for self-signed or internal CAs."
     )
     @PluginProperty(group = "advanced")
     protected Property<String> trustedCaPemPath;
@@ -264,15 +265,12 @@ public abstract class AbstractGitTask extends Task {
      * other edition. Idempotent for the custom-CA case: reconfigures if and only if the PEM content changes.
      */
     protected void configureEnvironmentWithSsl(RunContext runContext) throws Exception {
-        if (trustedCaPemPath == null) {
-            return;
-        }
-        String pemPath = runContext.render(trustedCaPemPath).as(String.class).orElse(null);
-        if (pemPath == null || pemPath.isBlank()) {
+        var pemPath = renderTrustedCaPemPath(runContext);
+        if (pemPath.isEmpty()) {
             return;
         }
 
-        String desiredKey = computeDesiredSslKey(pemPath);
+        String desiredKey = computeDesiredSslKey(pemPath.get());
 
         // Fast-path: already configured with this key
         if (desiredKey.equals(SSL_CONFIGURED_KEY.get())) {
@@ -285,14 +283,8 @@ public abstract class AbstractGitTask extends Task {
                 return;
             }
 
-            SSLContext sslContext = SSLContext.getInstance("TLS");
-
-            // Build composite TrustManager: [custom-from-PEM, jvm-default]
-            X509TrustManager customTm = buildTrustManagerFromPem(Path.of(pemPath));
-            X509TrustManager jvmTm = buildJvmDefaultTrustManager();
-            X509TrustManager composite = new CompositeX509TrustManager(List.of(customTm, jvmTm));
-            sslContext.init(null, new TrustManager[] { composite }, new SecureRandom());
-            runContext.logger().info("Configured SSLContext with PEM: {}", pemPath);
+            SSLContext sslContext = buildSslContext(pemPath.get());
+            runContext.logger().info("Configured SSLContext with PEM: {}", pemPath.get());
 
             // Apply as global defaults for JGit/HttpClient
             SSLContext.setDefault(sslContext);
@@ -302,6 +294,43 @@ public abstract class AbstractGitTask extends Task {
             SSL_CONFIGURED_KEY.set(desiredKey);
             runContext.logger().debug("SSL configured key now: {}", desiredKey);
         }
+    }
+
+    /**
+     * Builds a task-scoped {@link SSLContext} trusting {@code trustedCaPemPath} plus the JVM truststore, without
+     * touching the JVM-global default. Empty when the property is unset or blank.
+     *
+     * @throws IllegalArgumentException if the file is missing or holds no certificate; the message names the path
+     */
+    protected Optional<SSLContext> trustedCaSslContext(RunContext runContext) throws IllegalVariableEvaluationException {
+        var pemPath = renderTrustedCaPemPath(runContext);
+        if (pemPath.isEmpty()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(buildSslContext(pemPath.get()));
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Cannot load the CA certificates from `trustedCaPemPath` '" + pemPath.get() + "': " + e, e);
+        }
+    }
+
+    private Optional<String> renderTrustedCaPemPath(RunContext runContext) throws IllegalVariableEvaluationException {
+        if (trustedCaPemPath == null) {
+            return Optional.empty();
+        }
+        return runContext.render(trustedCaPemPath).as(String.class).filter(path -> !path.isBlank());
+    }
+
+    private static SSLContext buildSslContext(String pemPath) throws Exception {
+        var sslContext = SSLContext.getInstance("TLS");
+        // Composite TrustManager: [custom-from-PEM, jvm-default]
+        X509TrustManager customTm = buildTrustManagerFromPem(Path.of(pemPath));
+        X509TrustManager jvmTm = buildJvmDefaultTrustManager();
+        X509TrustManager composite = new CompositeX509TrustManager(List.of(customTm, jvmTm));
+        sslContext.init(null, new TrustManager[] { composite }, new SecureRandom());
+        return sslContext;
     }
 
     // Builds a key representing the desired SSL configuration: "PEM:<sha256-of-bytes>" of the trusted CA file.
