@@ -1,5 +1,6 @@
 package io.kestra.plugin.git.shared;
 
+import java.io.File;
 import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -9,6 +10,7 @@ import java.nio.file.Path;
 import java.security.KeyStore;
 import java.util.Base64;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
@@ -27,10 +29,12 @@ import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.Task;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextFactory;
+import io.kestra.core.utils.IdUtils;
 import io.kestra.core.utils.TestsUtils;
 import io.kestra.plugin.git.shared.TestTasks.TestCloningTask;
 import io.kestra.plugin.git.shared.TestTasks.TestKestraTask;
 import io.kestra.sdk.KestraClient;
+import io.kestra.sdk.internal.ApiException;
 
 import jakarta.inject.Inject;
 
@@ -38,6 +42,7 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.is;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /** {@code trustedCaPemPath} must apply to the Kestra API client, not only to the JVM-global Git transport. */
 @KestraTest
@@ -81,9 +86,13 @@ class TrustedCaPemPathTest {
             "-dname", "CN=localhost", "-ext", "SAN=dns:localhost,ip:127.0.0.1",
             "-validity", "2", "-storetype", "PKCS12",
             "-keystore", keystore.toString(), "-storepass", new String(PASSWORD)
-        ).redirectErrorStream(true).start();
+        ).redirectErrorStream(true).redirectInput(ProcessBuilder.Redirect.from(new File("/dev/null"))).start();
         var output = new String(process.getInputStream().readAllBytes());
-        assertThat(output, process.waitFor(), is(0));
+        if (!process.waitFor(120, TimeUnit.SECONDS)) {
+            process.destroyForcibly().waitFor(10, TimeUnit.SECONDS);
+            fail("keytool did not finish within 120s: " + output);
+        }
+        assertThat(output, process.exitValue(), is(0));
 
         var keyStore = KeyStore.getInstance("PKCS12");
         try (InputStream in = Files.newInputStream(keystore)) {
@@ -109,7 +118,7 @@ class TrustedCaPemPathTest {
 
     private static TestCloningTask.TestCloningTaskBuilder<?, ?> task(Property<String> trustedCaPemPath) {
         return TestCloningTask.builder()
-            .id("clone")
+            .id("clone-" + IdUtils.create())
             .type(TestCloningTask.class.getName())
             .url(Property.ofValue("https://github.com/kestra-io/plugin-git"))
             .kestraUrl(Property.ofValue(url))
@@ -121,14 +130,15 @@ class TrustedCaPemPathTest {
         return TestsUtils.mockRunContext(runContextFactory, task, Map.of());
     }
 
-    /** Any HTTP status means the TLS handshake passed; only a transport failure is returned. */
-    private static Throwable callFailure(KestraClient client) {
-        try {
-            client.misc().configuration();
-            return null;
-        } catch (Throwable e) {
-            return e;
-        }
+    /** The stub answers 404 to everything, so a 404 proves the TLS handshake passed and the server was reached. */
+    private static void assertReachedServer(KestraClient client) {
+        var e = assertThrows(ApiException.class, () -> client.misc().configuration());
+        assertThat(e.getCode(), is(404));
+    }
+
+    private static void assertHandshakeFails(KestraClient client) {
+        var failure = assertThrows(Throwable.class, () -> client.misc().configuration());
+        assertThat("failure: " + failure, hasHandshakeFailure(failure), is(true));
     }
 
     private static boolean hasHandshakeFailure(Throwable failure) {
@@ -145,16 +155,14 @@ class TrustedCaPemPathTest {
         var pemPath = writePem("ca.pem", pem);
         var task = task(Property.ofValue(pemPath.toString())).build();
 
-        var failure = callFailure(task.kestraClient(runContext(task)));
-
-        assertThat("failure: " + failure, failure == null || !hasHandshakeFailure(failure), is(true));
+        assertReachedServer(task.kestraClient(runContext(task)));
     }
 
     @Test
     void kestraApiTask_reachesAnApiSignedByTheTrustedCa() throws Exception {
         var pemPath = writePem("ca-kestra.pem", pem);
         var task = TestKestraTask.builder()
-            .id("kestraTask")
+            .id("kestra-" + IdUtils.create())
             .type(TestKestraTask.class.getName())
             .url(Property.ofValue("https://github.com/kestra-io/plugin-git"))
             .kestraUrl(Property.ofValue(url))
@@ -162,18 +170,14 @@ class TrustedCaPemPathTest {
             .trustedCaPemPath(Property.ofValue(pemPath.toString()))
             .build();
 
-        var failure = callFailure(task.kestraClient(runContext(task)));
-
-        assertThat("failure: " + failure, failure == null || !hasHandshakeFailure(failure), is(true));
+        assertReachedServer(task.kestraClient(runContext(task)));
     }
 
     @Test
     void cloningTask_failsTheHandshakeWithoutThePem() throws Exception {
         var task = task(null).build();
 
-        var failure = callFailure(task.kestraClient(runContext(task)));
-
-        assertThat("failure: " + failure, failure != null && hasHandshakeFailure(failure), is(true));
+        assertHandshakeFails(task.kestraClient(runContext(task)));
     }
 
     @Test
@@ -212,8 +216,6 @@ class TrustedCaPemPathTest {
         var task = task(Property.ofValue(bundle.toString())).build();
 
         // The served certificate is the second one of the bundle.
-        var failure = callFailure(task.kestraClient(runContext(task)));
-
-        assertThat("failure: " + failure, failure == null || !hasHandshakeFailure(failure), is(true));
+        assertReachedServer(task.kestraClient(runContext(task)));
     }
 }

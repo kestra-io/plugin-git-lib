@@ -164,7 +164,10 @@ public abstract class AbstractGitTask extends Task {
 
     @Schema(
         title = "Extra trusted CA PEM path",
-        description = "Optional PEM-encoded CA bundle trusted, in addition to the JVM truststore, for both the Git remote and the Kestra API (`kestraUrl`); equivalent to `git config http.sslCAInfo <path>` for self-signed or internal CAs."
+        description = """
+            Optional PEM-encoded CA bundle, trusted in addition to the JVM truststore for HTTPS connections to the \
+            Kestra API (`kestraUrl`) and to the Git remote. Equivalent to `git config http.sslCAInfo <path>` for \
+            self-signed or internal CAs."""
     )
     @PluginProperty(group = "advanced")
     protected Property<String> trustedCaPemPath;
@@ -265,12 +268,12 @@ public abstract class AbstractGitTask extends Task {
      * other edition. Idempotent for the custom-CA case: reconfigures if and only if the PEM content changes.
      */
     protected void configureEnvironmentWithSsl(RunContext runContext) throws Exception {
-        var pemPath = renderTrustedCaPemPath(runContext);
-        if (pemPath.isEmpty()) {
+        var rPemPath = renderTrustedCaPemPath(runContext);
+        if (rPemPath.isEmpty()) {
             return;
         }
 
-        String desiredKey = computeDesiredSslKey(pemPath.get());
+        String desiredKey = computeDesiredSslKey(rPemPath.get());
 
         // Fast-path: already configured with this key
         if (desiredKey.equals(SSL_CONFIGURED_KEY.get())) {
@@ -283,8 +286,8 @@ public abstract class AbstractGitTask extends Task {
                 return;
             }
 
-            SSLContext sslContext = buildSslContext(pemPath.get());
-            runContext.logger().info("Configured SSLContext with PEM: {}", pemPath.get());
+            var sslContext = buildSslContext(rPemPath.get());
+            runContext.logger().info("Configured SSLContext with PEM: {}", rPemPath.get());
 
             // Apply as global defaults for JGit/HttpClient
             SSLContext.setDefault(sslContext);
@@ -303,16 +306,16 @@ public abstract class AbstractGitTask extends Task {
      * @throws IllegalArgumentException if the file is missing or holds no certificate; the message names the path
      */
     protected Optional<SSLContext> trustedCaSslContext(RunContext runContext) throws IllegalVariableEvaluationException {
-        var pemPath = renderTrustedCaPemPath(runContext);
-        if (pemPath.isEmpty()) {
+        var rPemPath = renderTrustedCaPemPath(runContext);
+        if (rPemPath.isEmpty()) {
             return Optional.empty();
         }
         try {
-            return Optional.of(buildSslContext(pemPath.get()));
-        } catch (IllegalArgumentException e) {
-            throw e;
+            return Optional.of(buildSslContext(rPemPath.get()));
         } catch (Exception e) {
-            throw new IllegalArgumentException("Cannot load the CA certificates from `trustedCaPemPath` '" + pemPath.get() + "': " + e, e);
+            throw new IllegalArgumentException(
+                "Cannot load the CA certificates from `trustedCaPemPath` '" + rPemPath.get() + "': " + e.getMessage()
+                    + ". Check that the file exists on the worker and contains PEM-encoded certificates.", e);
         }
     }
 
@@ -326,9 +329,9 @@ public abstract class AbstractGitTask extends Task {
     private static SSLContext buildSslContext(String pemPath) throws Exception {
         var sslContext = SSLContext.getInstance("TLS");
         // Composite TrustManager: [custom-from-PEM, jvm-default]
-        X509TrustManager customTm = buildTrustManagerFromPem(Path.of(pemPath));
-        X509TrustManager jvmTm = buildJvmDefaultTrustManager();
-        X509TrustManager composite = new CompositeX509TrustManager(List.of(customTm, jvmTm));
+        var customTm = buildTrustManagerFromPem(Path.of(pemPath));
+        var jvmTm = buildJvmDefaultTrustManager();
+        var composite = new CompositeX509TrustManager(List.of(customTm, jvmTm));
         sslContext.init(null, new TrustManager[] { composite }, new SecureRandom());
         return sslContext;
     }
