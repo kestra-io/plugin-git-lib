@@ -1,7 +1,11 @@
 package io.kestra.plugin.git.shared;
 
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Predicate;
+import java.util.regex.Pattern;
 
 import javax.net.ssl.SSLHandshakeException;
 
@@ -146,18 +150,50 @@ final class KestraApiConnection {
 
     /**
      * Throws a message naming the Kestra API call, instead of the raw TLS error that reads as a Git remote failure,
-     * when {@code error} has an {@link SSLHandshakeException} in its cause chain; does nothing otherwise.
+     * when {@code error} has an {@link SSLHandshakeException} in its cause chain; does nothing otherwise, nor when
+     * {@code error} was already explained by an earlier call.
      */
-    static void failOnUntrustedCertificate(RunContext runContext, @Nullable Property<String> kestraUrl, @Nullable KestraApiAuth auth, Throwable error) throws IllegalVariableEvaluationException {
-        for (Throwable cause = error; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
+    static void failOnUntrustedCertificate(RunContext runContext, @Nullable Property<String> kestraUrl, @Nullable KestraApiAuth auth, Throwable error) {
+        Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Throwable cause = error; cause != null && seen.add(cause); cause = cause.getCause()) {
+            if (cause instanceof UntrustedCertificateException) {
+                return;
+            }
             if (cause instanceof SSLHandshakeException) {
-                throw new IllegalStateException(
-                    "Could not connect to the Kestra API at " + resolve(runContext, kestraUrl, auth).url() + ": its server certificate is not trusted by the JVM truststore. "
+                throw new UntrustedCertificateException(
+                    "Could not connect to the Kestra API at " + urlForMessage(runContext, kestraUrl, auth) + ": the TLS handshake failed, "
+                        + "most often because its server certificate is not trusted by the JVM truststore. "
                         + "This is the call to the Kestra API, not to the Git remote. Set `kestraUrl` to a URL whose certificate is trusted, "
-                        + "or add the issuing CA to the JVM truststore (`-Djavax.net.ssl.trustStore` in `JAVA_OPTS`). Cause: " + cause.getMessage(),
+                        + "or add the issuing CA to the JVM truststore (`-Djavax.net.ssl.trustStore` in `JAVA_OPTS`). Cause: "
+                        + Optional.ofNullable(cause.getMessage()).orElse(cause.getClass().getName()),
                     error
                 );
             }
+        }
+    }
+
+    /**
+     * The API URL for an error message, without any user info. Never throws: it runs while another error is being
+     * reported, which a rendering or configuration-lookup failure here must not replace.
+     */
+    private static String urlForMessage(RunContext runContext, @Nullable Property<String> kestraUrl, @Nullable KestraApiAuth auth) {
+        String url;
+        try {
+            url = resolve(runContext, kestraUrl, auth).url();
+        } catch (Exception e) {
+            return "the configured URL";
+        }
+        // a regex rather than java.net.URI, so a URL that does not parse still has its user info removed
+        return USER_INFO.matcher(url).replaceFirst("$1");
+    }
+
+    /** The {@code user:password@} part of a URL authority, kept out of error messages. */
+    private static final Pattern USER_INFO = Pattern.compile("^([^:/?#]+://)[^/?#]*@");
+
+    /** Marks an error already explained by {@link #failOnUntrustedCertificate}, so a second call does not wrap it again. */
+    static final class UntrustedCertificateException extends IllegalStateException {
+        private UntrustedCertificateException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 

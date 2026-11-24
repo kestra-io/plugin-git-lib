@@ -26,8 +26,10 @@ import jakarta.inject.Inject;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.startsWith;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /** The API URL comes from the same default SDK authentication as the credentials, so one instance-wide setting covers both. */
@@ -319,6 +321,74 @@ class KestraApiConnectionTest {
         var task = cloningTask().build();
         var runContext = runContextWithSdkUrl(task, SDK_DEFAULT_URL);
 
-        task.failOnUntrustedKestraCertificate(runContext, new IOException("connection refused"));
+        assertDoesNotThrow(() -> task.failOnUntrustedKestraCertificate(runContext, new IOException("connection refused")));
+    }
+
+    @Test
+    void shouldNotWrapAnAlreadyExplainedCertificateFailureTwice() throws Exception {
+        var task = cloningTask().kestraUrl(Property.ofValue("https://kestra.internal")).build();
+        var runContext = runContextWithSdkUrl(task, SDK_DEFAULT_URL);
+        var first = assertThrows(
+            IllegalStateException.class,
+            () -> task.failOnUntrustedKestraCertificate(runContext, new SSLHandshakeException("PKIX path building failed"))
+        );
+
+        assertDoesNotThrow(() -> task.failOnUntrustedKestraCertificate(runContext, new RuntimeException(first)));
+    }
+
+    @Test
+    void shouldStopOnACyclicCauseChain() throws Exception {
+        var task = cloningTask().build();
+        var runContext = runContextWithSdkUrl(task, SDK_DEFAULT_URL);
+        var a = new IOException("a");
+        var b = new IOException("b", a);
+        a.initCause(b);
+
+        assertDoesNotThrow(() -> task.failOnUntrustedKestraCertificate(runContext, a));
+    }
+
+    @Test
+    void shouldNotLeakUserInfoOfTheKestraUrl() throws Exception {
+        var task = cloningTask().kestraUrl(Property.ofValue("https://admin:s3cret@kestra.internal:8443/api")).build();
+        var runContext = runContextWithSdkUrl(task, SDK_DEFAULT_URL);
+
+        var thrown = assertThrows(
+            IllegalStateException.class,
+            () -> task.failOnUntrustedKestraCertificate(runContext, new SSLHandshakeException("PKIX path building failed"))
+        );
+
+        assertThat(thrown.getMessage(), containsString("https://kestra.internal:8443/api"));
+        assertThat(thrown.getMessage(), not(containsString("s3cret")));
+    }
+
+    @Test
+    void shouldNotLeakUserInfoOfAKestraUrlThatDoesNotParse() throws Exception {
+        var task = cloningTask().kestraUrl(Property.ofValue("https://admin:s3cret@kestra internal/api")).build();
+        var runContext = runContextWithSdkUrl(task, SDK_DEFAULT_URL);
+
+        var thrown = assertThrows(
+            IllegalStateException.class,
+            () -> task.failOnUntrustedKestraCertificate(runContext, new SSLHandshakeException("PKIX path building failed"))
+        );
+
+        assertThat(thrown.getMessage(), containsString("https://kestra internal/api"));
+        assertThat(thrown.getMessage(), not(containsString("s3cret")));
+    }
+
+    @Test
+    void kestraTask_shouldExplainAnUntrustedKestraApiCertificate() throws Exception {
+        var task = TestKestraTask.builder()
+            .id("kestraTask")
+            .type(TestKestraTask.class.getName())
+            .kestraUrl(Property.ofValue("https://kestra.internal"))
+            .auth(AbstractKestraTask.Auth.builder().apiToken(Property.ofValue("token")).build())
+            .build();
+
+        var thrown = assertThrows(
+            IllegalStateException.class,
+            () -> task.failOnUntrustedKestraCertificate(runContextFactory.of(), new SSLHandshakeException("PKIX path building failed"))
+        );
+
+        assertThat(thrown.getMessage(), containsString("https://kestra.internal"));
     }
 }

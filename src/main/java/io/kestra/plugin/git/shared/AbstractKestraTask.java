@@ -24,7 +24,12 @@ public abstract class AbstractKestraTask extends AbstractGitTask {
             URL of the Kestra server API.
             If not set, the URL of the default SDK authentication is used, set with the `kestra.tasks.sdk.authentication.url` \
             configuration property, or at the namespace or the tenant level on the Enterprise Edition.
-            It then falls back to the `kestra.url` configuration property, and finally to `http://localhost:8080`."""
+            It then falls back to the `kestra.url` configuration property, and finally to `http://localhost:8080`.
+
+            The task calls the Kestra API at this URL from the worker. If the URL is HTTPS with a self-signed or private-CA \
+            certificate, the CA must be in the JVM truststore of the worker, for example with \
+            `-Djavax.net.ssl.trustStore=... -Djavax.net.ssl.trustStorePassword=...` in `JAVA_OPTS`, \
+            using a truststore built from the JDK `cacerts` plus the CA."""
     )
     @PluginProperty(group = "connection")
     protected Property<String> kestraUrl;
@@ -36,6 +41,11 @@ public abstract class AbstractKestraTask extends AbstractGitTask {
 
     protected KestraClient kestraClient(RunContext runContext) throws IllegalVariableEvaluationException {
         return KestraApiConnection.buildClient(runContext, kestraUrl, auth, true, KestraTaskFamily.KESTRA_API);
+    }
+
+    /** Call from the catch block of a Kestra API call: rethrows a clear error when the failure is an untrusted server certificate. */
+    protected void failOnUntrustedKestraCertificate(RunContext runContext, Throwable error) {
+        KestraApiConnection.failOnUntrustedCertificate(runContext, kestraUrl, auth, error);
     }
 
     @Builder

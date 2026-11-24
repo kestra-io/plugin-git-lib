@@ -55,7 +55,7 @@ public abstract class AbstractCloningTask extends AbstractGitTask {
     }
 
     /** Call from the catch block of a Kestra API call: rethrows a clear error when the failure is an untrusted server certificate. */
-    protected void failOnUntrustedKestraCertificate(RunContext runContext, Throwable error) throws IllegalVariableEvaluationException {
+    protected void failOnUntrustedKestraCertificate(RunContext runContext, Throwable error) {
         KestraApiConnection.failOnUntrustedCertificate(runContext, kestraUrl, auth, error);
     }
 
@@ -86,14 +86,20 @@ public abstract class AbstractCloningTask extends AbstractGitTask {
         List<io.kestra.sdk.model.Namespace> results;
         do {
             // QUERY/EQUALS is a server-side contains filter, so prefix matches are never missed
-            PagedResultsNamespace result = client.namespaces().searchNamespaces(
-                tenantId,
-                page,
-                size,
-                null,
-                false,
-                List.of(new QueryFilter().field(QueryFilterField.QUERY).operation(QueryFilterOp.EQUALS).value(namespace + "."))
-            );
+            PagedResultsNamespace result;
+            try {
+                result = client.namespaces().searchNamespaces(
+                    tenantId,
+                    page,
+                    size,
+                    null,
+                    false,
+                    List.of(new QueryFilter().field(QueryFilterField.QUERY).operation(QueryFilterOp.EQUALS).value(namespace + "."))
+                );
+            } catch (RuntimeException e) {
+                failOnUntrustedKestraCertificate(runContext, e);
+                throw e;
+            }
             results = result.getResults();
             if (results == null) {
                 break;
