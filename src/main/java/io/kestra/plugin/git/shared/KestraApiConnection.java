@@ -92,7 +92,7 @@ final class KestraApiConnection {
      */
     static KestraClient buildClient(RunContext runContext, @Nullable Property<String> kestraUrl, @Nullable KestraApiAuth auth, boolean requireAuthentication, KestraTaskFamily family) throws IllegalVariableEvaluationException {
         KestraApiConnection connection = resolve(runContext, kestraUrl, auth);
-        runContext.logger().debug("Kestra URL: {}", connection.url());
+        runContext.logger().debug("Kestra URL: {}", withoutUserInfo(connection.url()));
 
         var builder = KestraClient.builder().url(connection.url());
 
@@ -161,7 +161,7 @@ final class KestraApiConnection {
             }
             if (cause instanceof SSLHandshakeException) {
                 throw new UntrustedCertificateException(
-                    "Could not connect to the Kestra API at " + urlForMessage(runContext, kestraUrl, auth) + ": the TLS handshake failed, "
+                    "Could not connect to the Kestra API at " + urlForMessage(runContext, kestraUrl, auth) + " because the TLS handshake failed, "
                         + "most often because its server certificate is not trusted by the JVM truststore. "
                         + "This is the call to the Kestra API, not to the Git remote. Set `kestraUrl` to a URL whose certificate is trusted, "
                         + "or add the issuing CA to the JVM truststore (`-Djavax.net.ssl.trustStore` in `JAVA_OPTS`). Cause: "
@@ -183,11 +183,18 @@ final class KestraApiConnection {
         } catch (Exception e) {
             return "the configured URL";
         }
-        // a regex rather than java.net.URI, so a URL that does not parse still has its user info removed
-        return USER_INFO.matcher(url).replaceFirst("$1");
+        return withoutUserInfo(url);
     }
 
-    /** The {@code user:password@} part of a URL authority, kept out of error messages. */
+    /**
+     * {@code url} without its {@code user:password@} part, for logs and messages. A regex rather than
+     * {@link java.net.URI}, so a URL that does not parse still has its user info removed.
+     */
+    static String withoutUserInfo(String url) {
+        return url == null ? null : USER_INFO.matcher(url).replaceFirst("$1");
+    }
+
+    /** The {@code user:password@} part of a URL authority, kept out of logs and error messages. */
     private static final Pattern USER_INFO = Pattern.compile("^([^:/?#]+://)[^/?#]*@");
 
     /** Marks an error already explained by {@link #failOnUntrustedCertificate}, so a second call does not wrap it again. */

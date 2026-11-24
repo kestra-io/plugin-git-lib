@@ -391,4 +391,26 @@ class KestraApiConnectionTest {
 
         assertThat(thrown.getMessage(), containsString("https://kestra.internal"));
     }
+
+    @Test
+    void shouldNotFollowTheUrlWithAColonInTheCertificateMessage() throws Exception {
+        var task = cloningTask().kestraUrl(Property.ofValue("https://kestra.internal")).build();
+        var runContext = runContextWithSdkUrl(task, SDK_DEFAULT_URL);
+
+        var thrown = assertThrows(
+            IllegalStateException.class,
+            () -> task.failOnUntrustedKestraCertificate(runContext, new SSLHandshakeException("PKIX path building failed"))
+        );
+
+        // log viewers turn the URL into a link and would take a trailing colon into it
+        assertThat(thrown.getMessage(), containsString("at https://kestra.internal because the TLS handshake failed"));
+    }
+
+    @Test
+    void withoutUserInfo_shouldRemoveOnlyTheUserInfo() {
+        assertThat(KestraApiConnection.withoutUserInfo("https://admin:s3cret@kestra.internal:8443/api?x=1"), is("https://kestra.internal:8443/api?x=1"));
+        assertThat(KestraApiConnection.withoutUserInfo("https://token@kestra.internal"), is("https://kestra.internal"));
+        assertThat(KestraApiConnection.withoutUserInfo("https://kestra.internal/a@b"), is("https://kestra.internal/a@b"));
+        assertThat(KestraApiConnection.withoutUserInfo("http://localhost:8080"), is("http://localhost:8080"));
+    }
 }
