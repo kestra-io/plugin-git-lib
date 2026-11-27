@@ -54,6 +54,8 @@ dependencies {
     // to suppress JGit's JVM shutdown hook (issue #23). That internal API has no compatibility contract, so on any
     // JGit bump re-run JGitShutdownRaceTest — it is the canary for both the mechanism (hook still suppressible)
     // and each failure mode (checkout index lock, fetch/partial-clone cleanup) — before releasing.
+    // Also re-run TrustedCaGitTransportTest: trustedCaPemPath relies on how TransportHttp and HttpClientConnection
+    // pick their SSL socket factory.
     api 'org.eclipse.jgit:org.eclipse.jgit:7.8.0.202609011348-r'
     api 'org.eclipse.jgit:org.eclipse.jgit.ssh.jsch:7.8.0.202609011348-r'
     api "org.eclipse.jgit:org.eclipse.jgit.http.apache:7.8.0.202609011348-r"

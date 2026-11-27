@@ -1,15 +1,10 @@
 package io.kestra.plugin.git.shared;
 
-import java.io.File;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.KeyStore;
-import java.util.Base64;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
@@ -41,13 +36,10 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.is;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.fail;
 
 /** {@code trustedCaPemPath} must apply to the Kestra API client, not only to the JVM-global Git transport. */
 @KestraTest
 class TrustedCaPemPathTest {
-    private static final char[] PASSWORD = "changeit".toCharArray();
-
     private static HttpsServer server;
     private static String url;
     private static String pem;
@@ -60,11 +52,11 @@ class TrustedCaPemPathTest {
 
     @BeforeAll
     static void startServer(@TempDir Path dir) throws Exception {
-        var keyStore = selfSignedKeyStore(dir.resolve("server.p12"));
-        pem = toPem(keyStore.getCertificate("server").getEncoded());
+        var keyStore = TlsTestSupport.selfSignedKeyStore(dir.resolve("server.p12"));
+        pem = TlsTestSupport.pem(keyStore);
 
         var kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-        kmf.init(keyStore, PASSWORD);
+        kmf.init(keyStore, TlsTestSupport.PASSWORD.toCharArray());
         var serverContext = SSLContext.getInstance("TLS");
         serverContext.init(kmf.getKeyManagers(), null, null);
 
@@ -80,37 +72,9 @@ class TrustedCaPemPathTest {
         url = "https://127.0.0.1:" + server.getAddress().getPort();
     }
 
-    private static KeyStore selfSignedKeyStore(Path keystore) throws Exception {
-        var log = keystore.resolveSibling(keystore.getFileName() + ".log");
-        var process = new ProcessBuilder(
-            Path.of(System.getProperty("java.home"), "bin", "keytool").toString(),
-            "-genkeypair", "-alias", "server", "-keyalg", "RSA", "-keysize", "2048",
-            "-dname", "CN=localhost", "-ext", "SAN=dns:localhost,ip:127.0.0.1",
-            "-validity", "2", "-storetype", "PKCS12",
-            "-keystore", keystore.toString(), "-storepass", new String(PASSWORD)
-        ).redirectErrorStream(true).redirectOutput(log.toFile()).redirectInput(ProcessBuilder.Redirect.from(new File("/dev/null"))).start();
-        if (!process.waitFor(120, TimeUnit.SECONDS)) {
-            process.destroyForcibly().waitFor(10, TimeUnit.SECONDS);
-            fail("keytool did not finish within 120s: " + Files.readString(log));
-        }
-        assertThat(Files.readString(log), process.exitValue(), is(0));
-
-        var keyStore = KeyStore.getInstance("PKCS12");
-        try (var in = Files.newInputStream(keystore)) {
-            keyStore.load(in, PASSWORD);
-        }
-        return keyStore;
-    }
-
     @AfterAll
     static void stopServer() {
         server.stop(0);
-    }
-
-    private static String toPem(byte[] der) {
-        return "-----BEGIN CERTIFICATE-----\n"
-            + Base64.getMimeEncoder(64, "\n".getBytes(StandardCharsets.US_ASCII)).encodeToString(der)
-            + "\n-----END CERTIFICATE-----\n";
     }
 
     private Path writePem(String name, String content) throws Exception {
@@ -212,7 +176,7 @@ class TrustedCaPemPathTest {
 
     @Test
     void multiCertificatePem_trustsEveryCertificate() throws Exception {
-        var other = toPem(selfSignedKeyStore(tempDir.resolve("other.p12")).getCertificate("server").getEncoded());
+        var other = TlsTestSupport.pem(TlsTestSupport.selfSignedKeyStore(tempDir.resolve("other.p12")));
         var bundle = writePem("bundle.pem", other + pem);
         var task = task(Property.ofValue(bundle.toString())).build();
 
@@ -241,22 +205,27 @@ class TrustedCaPemPathTest {
     }
 
     @Test
-    void configureEnvironmentWithSsl_rejectsAFileOverOneMiB() throws Exception {
-        var big = writePem("big-env.pem", pem + "#".repeat(1024 * 1024));
-        var task = task(Property.ofValue(big.toString())).build();
+    void kestraClient_readsThePemOncePerRunContext() throws Exception {
+        var pemPath = writePem("ca-memo.pem", pem);
+        var task = task(Property.ofValue(pemPath.toString())).build();
+        var runContext = runContext(task);
 
-        var e = assertThrows(IllegalArgumentException.class, () -> task.configureEnvironmentWithSsl(runContext(task)));
+        assertReachedServer(task.kestraClient(runContext));
+        Files.delete(pemPath);
 
-        assertThat(e.getMessage(), containsString("'" + big + "': it is larger than 1 MiB"));
+        // Served from the memoized context: the file is gone, so a re-read would fail
+        assertReachedServer(task.kestraClient(runContext));
+        assertThat(task.trustedCaTrustManagers(runContext).isPresent(), is(true));
     }
 
     @Test
-    void configureEnvironmentWithSsl_rejectsADirectory() throws Exception {
-        var dir = Files.createDirectory(tempDir.resolve("a-directory-env")).toString();
-        var task = task(Property.ofValue(dir)).build();
+    void kestraClient_readsThePemAgainForANewRunContext() throws Exception {
+        var pemPath = writePem("ca-memo-new-run.pem", pem);
+        var task = task(Property.ofValue(pemPath.toString())).build();
 
-        var e = assertThrows(IllegalArgumentException.class, () -> task.configureEnvironmentWithSsl(runContext(task)));
+        assertReachedServer(task.kestraClient(runContext(task)));
+        Files.delete(pemPath);
 
-        assertThat(e.getMessage(), containsString("'" + dir + "': it is not a regular file"));
+        assertThrows(IllegalArgumentException.class, () -> task.kestraClient(runContext(task)));
     }
 }
