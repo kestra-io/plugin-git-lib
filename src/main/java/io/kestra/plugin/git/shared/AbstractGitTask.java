@@ -381,7 +381,7 @@ public abstract class AbstractGitTask extends Task {
 
     // Builds a key representing the desired SSL configuration: "PEM:<sha256-of-bytes>" of the trusted CA file.
     private static String computeDesiredSslKey(String pemPath) throws Exception {
-        byte[] bytes = readPemBytes(Path.of(pemPath));
+        var bytes = readPemBytes(Path.of(pemPath));
         byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
         return "PEM:" + Base64.getEncoder().encodeToString(digest);
     }
@@ -398,7 +398,7 @@ public abstract class AbstractGitTask extends Task {
     }
 
     private static X509TrustManager buildTrustManagerFromPem(Path pemFile) throws Exception {
-        byte[] bytes = readPemBytes(pemFile);
+        var bytes = readPemBytes(pemFile);
 
         // Try to load one or multiple certs from the PEM
         CertificateFactory cf = CertificateFactory.getInstance("X.509");
