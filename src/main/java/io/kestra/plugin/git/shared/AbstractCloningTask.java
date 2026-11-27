@@ -29,7 +29,12 @@ public abstract class AbstractCloningTask extends AbstractGitTask {
             URL of the Kestra server API.
             If not set, the URL of the default SDK authentication is used, set with the `kestra.tasks.sdk.authentication.url` \
             configuration property, or at the namespace or the tenant level on the Enterprise Edition.
-            It then falls back to the `kestra.url` configuration property, and finally to `http://localhost:8080`."""
+            It then falls back to the `kestra.url` configuration property, and finally to `http://localhost:8080`.
+
+            The task calls the Kestra API at this URL from the worker. If the URL is HTTPS with a self-signed or private-CA \
+            certificate, the CA must be in the JVM truststore of the worker, for example with \
+            `-Djavax.net.ssl.trustStore=... -Djavax.net.ssl.trustStorePassword=...` in `JAVA_OPTS`, \
+            using a truststore built from the JDK `cacerts` plus the CA."""
     )
     @PluginProperty(group = "connection")
     protected Property<String> kestraUrl;
@@ -47,6 +52,11 @@ public abstract class AbstractCloningTask extends AbstractGitTask {
 
     protected KestraClient kestraClient(RunContext runContext) throws IllegalVariableEvaluationException {
         return KestraApiConnection.buildClient(runContext, kestraUrl, auth, requireKestraAuthentication(), KestraTaskFamily.CLONING, trustedCaSslContext(runContext).orElse(null));
+    }
+
+    /** Call from the catch block of a Kestra API call, as {@code throw explainKestraApiError(runContext, e)}: explains an untrusted server certificate, and returns {@code error} unchanged otherwise. */
+    protected RuntimeException explainKestraApiError(RunContext runContext, RuntimeException error) {
+        return KestraApiConnection.explainApiError(runContext, kestraUrl, auth, error);
     }
 
     /**
@@ -76,14 +86,19 @@ public abstract class AbstractCloningTask extends AbstractGitTask {
         List<io.kestra.sdk.model.Namespace> results;
         do {
             // QUERY/EQUALS is a server-side contains filter, so prefix matches are never missed
-            PagedResultsNamespace result = client.namespaces().searchNamespaces(
-                tenantId,
-                page,
-                size,
-                null,
-                false,
-                List.of(new QueryFilter().field(QueryFilterField.QUERY).operation(QueryFilterOp.EQUALS).value(namespace + "."))
-            );
+            PagedResultsNamespace result;
+            try {
+                result = client.namespaces().searchNamespaces(
+                    tenantId,
+                    page,
+                    size,
+                    null,
+                    false,
+                    List.of(new QueryFilter().field(QueryFilterField.QUERY).operation(QueryFilterOp.EQUALS).value(namespace + "."))
+                );
+            } catch (RuntimeException e) {
+                throw explainKestraApiError(runContext, e);
+            }
             results = result.getResults();
             if (results == null) {
                 break;
