@@ -1,5 +1,6 @@
 package io.kestra.plugin.git.shared;
 
+import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
@@ -208,12 +209,12 @@ class TrustedCaGitTransportTest {
         var created = new AtomicReference<HttpConnection>();
         var recording = new org.eclipse.jgit.transport.http.HttpConnectionFactory() {
             @Override
-            public HttpConnection create(URL url) throws java.io.IOException {
+            public HttpConnection create(URL url) throws IOException {
                 return create(url, null);
             }
 
             @Override
-            public HttpConnection create(URL url, Proxy p) throws java.io.IOException {
+            public HttpConnection create(URL url, Proxy p) throws IOException {
                 seenProxy.set(p);
                 var c = p == null ? delegate.create(url) : delegate.create(url, p);
                 created.set(c);
@@ -257,6 +258,50 @@ class TrustedCaGitTransportTest {
                 assertThat(((SshTransport) sshTransport).getSshSessionFactory(), is(not(sameInstance(defaultSshFactory))));
                 assertThat(((TransportHttp) httpTransport).getHttpConnectionFactory(), instanceOf(TrustedCaHttpConnectionFactory.class));
             }
+        }
+    }
+
+    @Test
+    void compositeCallback_wrapsTheTransportsOwnFactoryNotTheGlobalOne() throws Exception {
+        var used = new AtomicReference<String>();
+        var real = HttpTransport.getConnectionFactory();
+        var own = new org.eclipse.jgit.transport.http.HttpConnectionFactory() {
+            @Override
+            public HttpConnection create(URL url) throws IOException {
+                used.set("own");
+                return real.create(url);
+            }
+
+            @Override
+            public HttpConnection create(URL url, Proxy p) throws IOException {
+                used.set("own");
+                return real.create(url, p);
+            }
+        };
+        var callback = new TaskTransportConfigCallback(null, new TrustManager[0]);
+
+        try (var git = Git.init().setDirectory(tempDir.resolve("local").toFile()).call();
+            var transport = Transport.open(git.getRepository(), new URIish("https://127.0.0.1/repo.git"))) {
+            var http = (TransportHttp) transport;
+            http.setHttpConnectionFactory(own);
+            // Simulates another task reconfiguring the JVM-global factory after Transport.open
+            HttpTransport.setConnectionFactory(new org.eclipse.jgit.transport.http.HttpConnectionFactory() {
+                @Override
+                public HttpConnection create(URL url) {
+                    used.set("global");
+                    throw new IllegalStateException("global factory must not be used");
+                }
+
+                @Override
+                public HttpConnection create(URL url, Proxy p) {
+                    return create(url);
+                }
+            });
+
+            callback.configure(transport);
+            http.getHttpConnectionFactory().create(new URL("https://127.0.0.1:1/"));
+
+            assertThat(used.get(), is("own"));
         }
     }
 

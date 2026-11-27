@@ -3,7 +3,6 @@ package io.kestra.plugin.git.shared.services;
 import javax.net.ssl.TrustManager;
 
 import org.eclipse.jgit.api.TransportConfigCallback;
-import org.eclipse.jgit.transport.HttpTransport;
 import org.eclipse.jgit.transport.SshTransport;
 import org.eclipse.jgit.transport.Transport;
 import org.eclipse.jgit.transport.TransportHttp;
@@ -30,8 +29,10 @@ public class TaskTransportConfigCallback implements TransportConfigCallback {
         if (transport instanceof SshTransport && ssh != null) {
             ssh.configure(transport);
         } else if (transport instanceof TransportHttp http && trustManagers != null) {
+            // Wrap the transport's own factory (captured at Transport.open), not the JVM-global one, which another
+            // task on the same worker may have reconfigured since.
             http.setHttpConnectionFactory(
-                new TrustedCaHttpConnectionFactory(HttpTransport.getConnectionFactory(), trustManagers)
+                new TrustedCaHttpConnectionFactory(http.getHttpConnectionFactory(), trustManagers)
             );
         }
     }

@@ -75,6 +75,8 @@ public abstract class AbstractGitTask extends Task {
 
     @Getter(AccessLevel.NONE)
     @JsonIgnore
+    @EqualsAndHashCode.Exclude
+    @ToString.Exclude
     private final transient AtomicReference<TrustedCa> trustedCaCache = new AtomicReference<>();
 
     // Namespace-first Git layout used by every namespace/tenant sync task: <namespace>/flows, <namespace>/files.
