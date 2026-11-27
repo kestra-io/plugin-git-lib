@@ -1,6 +1,7 @@
 package io.kestra.plugin.git.shared;
 
 import java.io.*;
+import java.lang.ref.WeakReference;
 import java.net.Proxy;
 import java.net.URI;
 import java.net.URL;
@@ -36,8 +37,8 @@ import org.eclipse.jgit.transport.http.apache.HttpClientConnection;
 import org.eclipse.jgit.transport.http.apache.HttpClientConnectionFactory;
 import org.eclipse.jgit.treewalk.EmptyTreeIterator;
 
-import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -297,7 +298,7 @@ public abstract class AbstractGitTask extends Task {
         }
 
         var cached = trustedCaCache.get();
-        if (cached != null && cached.runContext() == runContext && cached.pemPath().equals(rPemPath.get())) {
+        if (cached != null && cached.runContext().get() == runContext && cached.pemPath().equals(rPemPath.get())) {
             return Optional.of(cached);
         }
 
@@ -305,7 +306,7 @@ public abstract class AbstractGitTask extends Task {
             var trustManagers = new TrustManager[] { buildCompositeTrustManager(Path.of(rPemPath.get())) };
             var sslContext = SSLContext.getInstance("TLS");
             sslContext.init(null, trustManagers, new SecureRandom());
-            var built = new TrustedCa(runContext, rPemPath.get(), trustManagers, sslContext);
+            var built = new TrustedCa(new WeakReference<>(runContext), rPemPath.get(), trustManagers, sslContext);
             trustedCaCache.set(built);
             return Optional.of(built);
         } catch (PemFileRejectedException e) {
@@ -323,7 +324,8 @@ public abstract class AbstractGitTask extends Task {
         }
     }
 
-    private record TrustedCa(RunContext runContext, String pemPath, TrustManager[] trustManagers, SSLContext sslContext) {
+    // Weak key: the cache must not keep a finished run's RunContext reachable for the lifetime of the task instance.
+    private record TrustedCa(WeakReference<RunContext> runContext, String pemPath, TrustManager[] trustManagers, SSLContext sslContext) {
     }
 
     private Optional<String> renderTrustedCaPemPath(RunContext runContext) throws IllegalVariableEvaluationException {

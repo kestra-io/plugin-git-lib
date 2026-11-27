@@ -1,11 +1,14 @@
 package io.kestra.plugin.git.shared;
 
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyStore;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 import javax.net.ssl.HttpsURLConnection;
@@ -23,7 +26,6 @@ import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.errors.TransportException;
 import org.eclipse.jgit.http.server.GitServlet;
-import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.transport.HttpTransport;
 import org.eclipse.jgit.transport.SshTransport;
 import org.eclipse.jgit.transport.Transport;
@@ -36,9 +38,9 @@ import org.eclipse.jgit.transport.http.apache.HttpClientConnectionFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
-import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
@@ -200,10 +202,32 @@ class TrustedCaGitTransportTest {
         var runContext = runContext(task);
         task.configureHttpTransport(runContext);
 
-        var wrapped = new TrustedCaHttpConnectionFactory(HttpTransport.getConnectionFactory(), task.trustedCaTrustManagers(runContext).orElseThrow());
-        HttpConnection connection = wrapped.create(new URL("https://127.0.0.1:1/"));
+        var proxy = new Proxy(Proxy.Type.HTTP, new InetSocketAddress("127.0.0.1", 1));
+        var delegate = HttpTransport.getConnectionFactory();
+        var seenProxy = new AtomicReference<Proxy>();
+        var created = new AtomicReference<HttpConnection>();
+        var recording = new org.eclipse.jgit.transport.http.HttpConnectionFactory() {
+            @Override
+            public HttpConnection create(URL url) throws java.io.IOException {
+                return create(url, null);
+            }
+
+            @Override
+            public HttpConnection create(URL url, Proxy p) throws java.io.IOException {
+                seenProxy.set(p);
+                var c = p == null ? delegate.create(url) : delegate.create(url, p);
+                created.set(c);
+                return c;
+            }
+        };
+
+        var connection = new TrustedCaHttpConnectionFactory(recording, task.trustedCaTrustManagers(runContext).orElseThrow())
+            .create(new URL("https://127.0.0.1:1/"), proxy);
+
+        // The wrapper must forward the proxy untouched to the configured factory and return its connection
+        assertThat(seenProxy.get(), is(sameInstance(proxy)));
+        assertThat(connection, is(sameInstance(created.get())));
         assertThat(connection, instanceOf(HttpClientConnection.class));
-        assertThat(connection.usingProxy(), is(false));
     }
 
     private static boolean hasCause(Throwable failure, Class<? extends Throwable> type) {
@@ -222,7 +246,7 @@ class TrustedCaGitTransportTest {
         var callback = new TaskTransportConfigCallback(ssh, trustManagers);
 
         try (var git = Git.init().setDirectory(tempDir.resolve("local").toFile()).call()) {
-            Repository repository = git.getRepository();
+            var repository = git.getRepository();
             try (var sshTransport = Transport.open(repository, new URIish("ssh://git@127.0.0.1/repo.git"));
                 var httpTransport = Transport.open(repository, new URIish("https://127.0.0.1/repo.git"))) {
                 var defaultSshFactory = ((SshTransport) sshTransport).getSshSessionFactory();
