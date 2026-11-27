@@ -1,7 +1,6 @@
 package io.kestra.plugin.git.shared;
 
 import java.io.File;
-import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -97,7 +96,7 @@ class TrustedCaPemPathTest {
         assertThat(Files.readString(log), process.exitValue(), is(0));
 
         var keyStore = KeyStore.getInstance("PKCS12");
-        try (InputStream in = Files.newInputStream(keystore)) {
+        try (var in = Files.newInputStream(keystore)) {
             keyStore.load(in, PASSWORD);
         }
         return keyStore;
@@ -219,5 +218,45 @@ class TrustedCaPemPathTest {
 
         // The served certificate is the second one of the bundle.
         assertReachedServer(task.kestraClient(runContext(task)));
+    }
+
+    @Test
+    void helper_rejectsAFileOverOneMiB() throws Exception {
+        var big = writePem("big.pem", pem + "#".repeat(1024 * 1024));
+        var task = task(Property.ofValue(big.toString())).build();
+
+        var e = assertThrows(IllegalArgumentException.class, () -> task.trustedCaSslContext(runContext(task)));
+
+        assertThat(e.getMessage(), containsString("'" + big + "': it is larger than 1 MiB"));
+    }
+
+    @Test
+    void helper_rejectsADirectory() throws Exception {
+        var dir = Files.createDirectory(tempDir.resolve("a-directory")).toString();
+        var task = task(Property.ofValue(dir)).build();
+
+        var e = assertThrows(IllegalArgumentException.class, () -> task.trustedCaSslContext(runContext(task)));
+
+        assertThat(e.getMessage(), containsString("'" + dir + "': it is not a regular file"));
+    }
+
+    @Test
+    void configureEnvironmentWithSsl_rejectsAFileOverOneMiB() throws Exception {
+        var big = writePem("big-env.pem", pem + "#".repeat(1024 * 1024));
+        var task = task(Property.ofValue(big.toString())).build();
+
+        var e = assertThrows(IllegalArgumentException.class, () -> task.configureEnvironmentWithSsl(runContext(task)));
+
+        assertThat(e.getMessage(), containsString("'" + big + "': it is larger than 1 MiB"));
+    }
+
+    @Test
+    void configureEnvironmentWithSsl_rejectsADirectory() throws Exception {
+        var dir = Files.createDirectory(tempDir.resolve("a-directory-env")).toString();
+        var task = task(Property.ofValue(dir)).build();
+
+        var e = assertThrows(IllegalArgumentException.class, () -> task.configureEnvironmentWithSsl(runContext(task)));
+
+        assertThat(e.getMessage(), containsString("'" + dir + "': it is not a regular file"));
     }
 }

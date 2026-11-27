@@ -73,6 +73,7 @@ public abstract class AbstractGitTask extends Task {
     // Possible values: "JVM" or "PEM:<sha256-of-file-bytes>"
     private static final AtomicReference<String> SSL_CONFIGURED_KEY = new AtomicReference<>(null);
     private static final Object SSL_CONFIG_LOCK = new Object();
+    private static final int MAX_PEM_BYTES = 1024 * 1024;
 
     // Namespace-first Git layout used by every namespace/tenant sync task: <namespace>/flows, <namespace>/files.
     private static final String FLOWS_DIR = "flows";
@@ -275,7 +276,7 @@ public abstract class AbstractGitTask extends Task {
             return;
         }
 
-        String desiredKey = computeDesiredSslKey(rPemPath.get());
+        var desiredKey = computeDesiredSslKey(rPemPath.get());
 
         // Fast-path: already configured with this key
         if (desiredKey.equals(SSL_CONFIGURED_KEY.get())) {
@@ -314,6 +315,8 @@ public abstract class AbstractGitTask extends Task {
         }
         try {
             return Optional.of(buildSslContext(rPemPath.get()));
+        } catch (PemFileRejectedException e) {
+            throw e;
         } catch (Exception e) {
             // For these two, getMessage() is only the path, which the message already names
             var reason = switch (e) {
@@ -344,9 +347,41 @@ public abstract class AbstractGitTask extends Task {
         return sslContext;
     }
 
+    /**
+     * Single entry point for every read of {@code trustedCaPemPath}: the path is flow-author controlled, so a
+     * device such as {@code /dev/zero} or a huge file must not be slurped into the worker heap.
+     */
+    private static byte[] readPemBytes(Path pemFile) throws IOException {
+        if (!Files.isRegularFile(pemFile)) {
+            // A missing file keeps its NoSuchFileException so the caller reports "file not found"
+            if (!Files.exists(pemFile)) {
+                throw new NoSuchFileException(pemFile.toString());
+            }
+            throw new PemFileRejectedException(pemFile, "it is not a regular file");
+        }
+        if (Files.size(pemFile) > MAX_PEM_BYTES) {
+            throw new PemFileRejectedException(pemFile, "it is larger than 1 MiB");
+        }
+        // Bounded read as well: the size can change between the check above and the read
+        try (var in = Files.newInputStream(pemFile)) {
+            var bytes = in.readNBytes(MAX_PEM_BYTES + 1);
+            if (bytes.length > MAX_PEM_BYTES) {
+                throw new PemFileRejectedException(pemFile, "it is larger than 1 MiB");
+            }
+            return bytes;
+        }
+    }
+
+    private static final class PemFileRejectedException extends IllegalArgumentException {
+        PemFileRejectedException(Path pemFile, String reason) {
+            super("Cannot load the CA certificates from `trustedCaPemPath` '" + pemFile + "': " + reason
+                + ". Point it at a PEM file of at most 1 MiB.");
+        }
+    }
+
     // Builds a key representing the desired SSL configuration: "PEM:<sha256-of-bytes>" of the trusted CA file.
     private static String computeDesiredSslKey(String pemPath) throws Exception {
-        byte[] bytes = Files.readAllBytes(Path.of(pemPath));
+        byte[] bytes = readPemBytes(Path.of(pemPath));
         byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
         return "PEM:" + Base64.getEncoder().encodeToString(digest);
     }
@@ -363,7 +398,7 @@ public abstract class AbstractGitTask extends Task {
     }
 
     private static X509TrustManager buildTrustManagerFromPem(Path pemFile) throws Exception {
-        byte[] bytes = Files.readAllBytes(pemFile);
+        byte[] bytes = readPemBytes(pemFile);
 
         // Try to load one or multiple certs from the PEM
         CertificateFactory cf = CertificateFactory.getInstance("X.509");
