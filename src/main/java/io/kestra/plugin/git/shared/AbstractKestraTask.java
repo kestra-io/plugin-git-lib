@@ -43,9 +43,9 @@ public abstract class AbstractKestraTask extends AbstractGitTask {
         return KestraApiConnection.buildClient(runContext, kestraUrl, auth, true, KestraTaskFamily.KESTRA_API);
     }
 
-    /** Call from the catch block of a Kestra API call: rethrows a clear error when the failure is an untrusted server certificate. */
-    protected void failOnUntrustedKestraCertificate(RunContext runContext, Throwable error) {
-        KestraApiConnection.failOnUntrustedCertificate(runContext, kestraUrl, auth, error);
+    /** Call from the catch block of a Kestra API call, as {@code throw explainKestraApiError(runContext, e)}: explains an untrusted server certificate, and returns {@code error} unchanged otherwise. */
+    protected RuntimeException explainKestraApiError(RunContext runContext, RuntimeException error) {
+        return KestraApiConnection.explainApiError(runContext, kestraUrl, auth, error);
     }
 
     @Builder

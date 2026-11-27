@@ -1,11 +1,12 @@
 package io.kestra.plugin.git.shared;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Predicate;
-import java.util.regex.Pattern;
 
 import javax.net.ssl.SSLHandshakeException;
 
@@ -26,6 +27,7 @@ import jakarta.annotation.Nullable;
  */
 final class KestraApiConnection {
     private static final String DEFAULT_URL = "http://localhost:8080";
+    private static final String UNPRINTABLE_URL = "the configured URL";
     private static final String URL_TEMPLATE = "{{ kestra.url }}";
     private static final String NO_AUTH_MESSAGE = "No authentication method provided. Set 'auth.apiToken', or " +
         "'auth.username' and 'auth.password', or configure a default one with the 'kestra.tasks.sdk.authentication' properties. " +
@@ -92,7 +94,7 @@ final class KestraApiConnection {
      */
     static KestraClient buildClient(RunContext runContext, @Nullable Property<String> kestraUrl, @Nullable KestraApiAuth auth, boolean requireAuthentication, KestraTaskFamily family) throws IllegalVariableEvaluationException {
         KestraApiConnection connection = resolve(runContext, kestraUrl, auth);
-        runContext.logger().debug("Kestra URL: {}", withoutUserInfo(connection.url()));
+        runContext.logger().debug("Kestra URL: {}", safeUrl(connection.url()));
 
         var builder = KestraClient.builder().url(connection.url());
 
@@ -149,18 +151,18 @@ final class KestraApiConnection {
     }
 
     /**
-     * Throws a message naming the Kestra API call, instead of the raw TLS error that reads as a Git remote failure,
-     * when {@code error} has an {@link SSLHandshakeException} in its cause chain; does nothing otherwise, nor when
-     * {@code error} was already explained by an earlier call.
+     * The error to throw for a failed Kestra API call: a message naming the Kestra API, instead of the raw TLS error
+     * that reads as a Git remote failure, when {@code error} has an {@link SSLHandshakeException} in its cause chain;
+     * {@code error} itself otherwise, including when it was already explained by an earlier call.
      */
-    static void failOnUntrustedCertificate(RunContext runContext, @Nullable Property<String> kestraUrl, @Nullable KestraApiAuth auth, Throwable error) {
+    static RuntimeException explainApiError(RunContext runContext, @Nullable Property<String> kestraUrl, @Nullable KestraApiAuth auth, RuntimeException error) {
         Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
         for (Throwable cause = error; cause != null && seen.add(cause); cause = cause.getCause()) {
             if (cause instanceof UntrustedCertificateException) {
-                return;
+                return error;
             }
             if (cause instanceof SSLHandshakeException) {
-                throw new UntrustedCertificateException(
+                return new UntrustedCertificateException(
                     "Could not connect to the Kestra API at " + urlForMessage(runContext, kestraUrl, auth) + " because the TLS handshake failed, "
                         + "most often because its server certificate is not trusted by the JVM truststore. "
                         + "This is the call to the Kestra API, not to the Git remote. Set `kestraUrl` to a URL whose certificate is trusted, "
@@ -170,6 +172,7 @@ final class KestraApiConnection {
                 );
             }
         }
+        return error;
     }
 
     /**
@@ -181,23 +184,32 @@ final class KestraApiConnection {
         try {
             url = resolve(runContext, kestraUrl, auth).url();
         } catch (Exception e) {
-            return "the configured URL";
+            return UNPRINTABLE_URL;
         }
-        return withoutUserInfo(url);
+        return safeUrl(url);
     }
 
     /**
-     * {@code url} without its {@code user:password@} part, for logs and messages. A regex rather than
-     * {@link java.net.URI}, so a URL that does not parse still has its user info removed.
+     * {@code scheme://host[:port]/path} of {@code url}, for logs and messages: user info, query and fragment are never
+     * printed. A URL that does not parse with a host (e.g. a raw {@code /}, {@code ?} or {@code #} in the password
+     * moves the authority boundary) is replaced entirely, since no part of it can be told apart from the user info.
      */
-    static String withoutUserInfo(String url) {
-        return url == null ? null : USER_INFO.matcher(url).replaceFirst("$1");
+    static String safeUrl(@Nullable String url) {
+        if (url == null) {
+            return null;
+        }
+        try {
+            URI uri = new URI(url);
+            if (uri.getScheme() == null || uri.getHost() == null) {
+                return UNPRINTABLE_URL;
+            }
+            return uri.getScheme() + "://" + uri.getHost() + (uri.getPort() == -1 ? "" : ":" + uri.getPort()) + Optional.ofNullable(uri.getRawPath()).orElse("");
+        } catch (URISyntaxException e) {
+            return UNPRINTABLE_URL;
+        }
     }
 
-    /** The {@code user:password@} part of a URL authority, kept out of logs and error messages. */
-    private static final Pattern USER_INFO = Pattern.compile("^([^:/?#]+://)[^/?#]*@");
-
-    /** Marks an error already explained by {@link #failOnUntrustedCertificate}, so a second call does not wrap it again. */
+    /** Marks an error already explained by {@link #explainApiError}, so a second call does not wrap it again. */
     static final class UntrustedCertificateException extends IllegalStateException {
         private UntrustedCertificateException(String message, Throwable cause) {
             super(message, cause);

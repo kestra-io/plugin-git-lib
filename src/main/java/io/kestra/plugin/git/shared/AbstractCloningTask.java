@@ -54,9 +54,9 @@ public abstract class AbstractCloningTask extends AbstractGitTask {
         return KestraApiConnection.buildClient(runContext, kestraUrl, auth, requireKestraAuthentication(), KestraTaskFamily.CLONING);
     }
 
-    /** Call from the catch block of a Kestra API call: rethrows a clear error when the failure is an untrusted server certificate. */
-    protected void failOnUntrustedKestraCertificate(RunContext runContext, Throwable error) {
-        KestraApiConnection.failOnUntrustedCertificate(runContext, kestraUrl, auth, error);
+    /** Call from the catch block of a Kestra API call, as {@code throw explainKestraApiError(runContext, e)}: explains an untrusted server certificate, and returns {@code error} unchanged otherwise. */
+    protected RuntimeException explainKestraApiError(RunContext runContext, RuntimeException error) {
+        return KestraApiConnection.explainApiError(runContext, kestraUrl, auth, error);
     }
 
     /**
@@ -97,8 +97,7 @@ public abstract class AbstractCloningTask extends AbstractGitTask {
                     List.of(new QueryFilter().field(QueryFilterField.QUERY).operation(QueryFilterOp.EQUALS).value(namespace + "."))
                 );
             } catch (RuntimeException e) {
-                failOnUntrustedKestraCertificate(runContext, e);
-                throw e;
+                throw explainKestraApiError(runContext, e);
             }
             results = result.getResults();
             if (results == null) {
