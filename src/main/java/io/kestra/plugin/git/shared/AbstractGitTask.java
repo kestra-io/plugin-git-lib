@@ -5,7 +5,9 @@ import java.net.Proxy;
 import java.net.URI;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.security.KeyStore;
 import java.security.MessageDigest;
@@ -39,6 +41,7 @@ import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import io.kestra.core.exceptions.IllegalVariableEvaluationException;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.Task;
 import io.kestra.core.runners.RunContext;
@@ -70,6 +73,7 @@ public abstract class AbstractGitTask extends Task {
     // Possible values: "JVM" or "PEM:<sha256-of-file-bytes>"
     private static final AtomicReference<String> SSL_CONFIGURED_KEY = new AtomicReference<>(null);
     private static final Object SSL_CONFIG_LOCK = new Object();
+    private static final int MAX_PEM_BYTES = 1024 * 1024;
 
     // Namespace-first Git layout used by every namespace/tenant sync task: <namespace>/flows, <namespace>/files.
     private static final String FLOWS_DIR = "flows";
@@ -163,7 +167,10 @@ public abstract class AbstractGitTask extends Task {
 
     @Schema(
         title = "Extra trusted CA PEM path",
-        description = "Optional PEM-encoded CA bundle added to the JVM truststore; equivalent to `git config http.sslCAInfo <path>` for self-signed or internal CAs."
+        description = """
+            Optional PEM-encoded CA bundle, trusted in addition to the JVM truststore for HTTPS connections to the \
+            Kestra API (`kestraUrl`) and to the Git remote. Equivalent to `git config http.sslCAInfo <path>` for \
+            self-signed or internal CAs. `NamespaceSync` and `TenantSync` do not apply it to the Git remote yet."""
     )
     @PluginProperty(group = "advanced")
     protected Property<String> trustedCaPemPath;
@@ -264,15 +271,12 @@ public abstract class AbstractGitTask extends Task {
      * other edition. Idempotent for the custom-CA case: reconfigures if and only if the PEM content changes.
      */
     protected void configureEnvironmentWithSsl(RunContext runContext) throws Exception {
-        if (trustedCaPemPath == null) {
-            return;
-        }
-        String pemPath = runContext.render(trustedCaPemPath).as(String.class).orElse(null);
-        if (pemPath == null || pemPath.isBlank()) {
+        var rPemPath = renderTrustedCaPemPath(runContext);
+        if (rPemPath.isEmpty()) {
             return;
         }
 
-        String desiredKey = computeDesiredSslKey(pemPath);
+        var desiredKey = computeDesiredSslKey(rPemPath.get());
 
         // Fast-path: already configured with this key
         if (desiredKey.equals(SSL_CONFIGURED_KEY.get())) {
@@ -285,14 +289,8 @@ public abstract class AbstractGitTask extends Task {
                 return;
             }
 
-            SSLContext sslContext = SSLContext.getInstance("TLS");
-
-            // Build composite TrustManager: [custom-from-PEM, jvm-default]
-            X509TrustManager customTm = buildTrustManagerFromPem(Path.of(pemPath));
-            X509TrustManager jvmTm = buildJvmDefaultTrustManager();
-            X509TrustManager composite = new CompositeX509TrustManager(List.of(customTm, jvmTm));
-            sslContext.init(null, new TrustManager[] { composite }, new SecureRandom());
-            runContext.logger().info("Configured SSLContext with PEM: {}", pemPath);
+            var sslContext = buildSslContext(rPemPath.get());
+            runContext.logger().info("Configured SSLContext with PEM: {}", rPemPath.get());
 
             // Apply as global defaults for JGit/HttpClient
             SSLContext.setDefault(sslContext);
@@ -304,9 +302,86 @@ public abstract class AbstractGitTask extends Task {
         }
     }
 
+    /**
+     * Builds a task-scoped {@link SSLContext} trusting {@code trustedCaPemPath} plus the JVM truststore, without
+     * touching the JVM-global default. Empty when the property is unset or blank.
+     *
+     * @throws IllegalArgumentException if the file is missing or holds no certificate; the message names the path
+     */
+    protected Optional<SSLContext> trustedCaSslContext(RunContext runContext) throws IllegalVariableEvaluationException {
+        var rPemPath = renderTrustedCaPemPath(runContext);
+        if (rPemPath.isEmpty()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(buildSslContext(rPemPath.get()));
+        } catch (PemFileRejectedException e) {
+            throw e;
+        } catch (Exception e) {
+            // For these two, getMessage() is only the path, which the message already names
+            var reason = switch (e) {
+                case NoSuchFileException ignored -> "file not found";
+                case AccessDeniedException ignored -> "permission denied";
+                default -> e.getMessage();
+            };
+            throw new IllegalArgumentException(
+                "Cannot load the CA certificates from `trustedCaPemPath` '" + rPemPath.get() + "': " + reason
+                    + ". Check that the file exists on the worker, is readable, and contains PEM-encoded certificates.", e);
+        }
+    }
+
+    private Optional<String> renderTrustedCaPemPath(RunContext runContext) throws IllegalVariableEvaluationException {
+        if (trustedCaPemPath == null) {
+            return Optional.empty();
+        }
+        return runContext.render(trustedCaPemPath).as(String.class).filter(path -> !path.isBlank());
+    }
+
+    private static SSLContext buildSslContext(String pemPath) throws Exception {
+        var sslContext = SSLContext.getInstance("TLS");
+        // Composite TrustManager: [custom-from-PEM, jvm-default]
+        var customTm = buildTrustManagerFromPem(Path.of(pemPath));
+        var jvmTm = buildJvmDefaultTrustManager();
+        var composite = new CompositeX509TrustManager(List.of(customTm, jvmTm));
+        sslContext.init(null, new TrustManager[] { composite }, new SecureRandom());
+        return sslContext;
+    }
+
+    /**
+     * Single entry point for every read of {@code trustedCaPemPath}: the path is flow-author controlled, so a
+     * device such as {@code /dev/zero} or a huge file must not be slurped into the worker heap.
+     */
+    private static byte[] readPemBytes(Path pemFile) throws IOException {
+        if (!Files.isRegularFile(pemFile)) {
+            // A missing file keeps its NoSuchFileException so the caller reports "file not found"
+            if (!Files.exists(pemFile)) {
+                throw new NoSuchFileException(pemFile.toString());
+            }
+            throw new PemFileRejectedException(pemFile, "it is not a regular file");
+        }
+        if (Files.size(pemFile) > MAX_PEM_BYTES) {
+            throw new PemFileRejectedException(pemFile, "it is larger than 1 MiB");
+        }
+        // Bounded read as well: the size can change between the check above and the read
+        try (var in = Files.newInputStream(pemFile)) {
+            var bytes = in.readNBytes(MAX_PEM_BYTES + 1);
+            if (bytes.length > MAX_PEM_BYTES) {
+                throw new PemFileRejectedException(pemFile, "it is larger than 1 MiB");
+            }
+            return bytes;
+        }
+    }
+
+    private static final class PemFileRejectedException extends IllegalArgumentException {
+        PemFileRejectedException(Path pemFile, String reason) {
+            super("Cannot load the CA certificates from `trustedCaPemPath` '" + pemFile + "': " + reason
+                + ". Point it at a PEM file of at most 1 MiB.");
+        }
+    }
+
     // Builds a key representing the desired SSL configuration: "PEM:<sha256-of-bytes>" of the trusted CA file.
     private static String computeDesiredSslKey(String pemPath) throws Exception {
-        byte[] bytes = Files.readAllBytes(Path.of(pemPath));
+        var bytes = readPemBytes(Path.of(pemPath));
         byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
         return "PEM:" + Base64.getEncoder().encodeToString(digest);
     }
@@ -323,7 +398,7 @@ public abstract class AbstractGitTask extends Task {
     }
 
     private static X509TrustManager buildTrustManagerFromPem(Path pemFile) throws Exception {
-        byte[] bytes = Files.readAllBytes(pemFile);
+        var bytes = readPemBytes(pemFile);
 
         // Try to load one or multiple certs from the PEM
         CertificateFactory cf = CertificateFactory.getInstance("X.509");

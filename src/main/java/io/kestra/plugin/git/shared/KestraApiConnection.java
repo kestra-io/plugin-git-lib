@@ -8,6 +8,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Predicate;
 
+import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLHandshakeException;
 
 import io.kestra.core.exceptions.IllegalVariableEvaluationException;
@@ -91,12 +92,14 @@ final class KestraApiConnection {
      * <p>{@code family} carries the two ways the two hierarchies have always differed and must keep differing
      * (see {@link KestraTaskFamily}): which credential wins in the default SDK authentication when it carries both
      * a token and Basic credentials, and how strictly the explicit mutual-exclusion is enforced.
+     *
+     * <p>{@code sslContext} is the TLS context for this client only; {@code null} keeps the JVM default.
      */
-    static KestraClient buildClient(RunContext runContext, @Nullable Property<String> kestraUrl, @Nullable KestraApiAuth auth, boolean requireAuthentication, KestraTaskFamily family) throws IllegalVariableEvaluationException {
+    static KestraClient buildClient(RunContext runContext, @Nullable Property<String> kestraUrl, @Nullable KestraApiAuth auth, boolean requireAuthentication, KestraTaskFamily family, @Nullable SSLContext sslContext) throws IllegalVariableEvaluationException {
         KestraApiConnection connection = resolve(runContext, kestraUrl, auth);
         runContext.logger().debug("Kestra URL: {}", safeUrl(connection.url()));
 
-        var builder = KestraClient.builder().url(connection.url());
+        var builder = KestraClient.builder().url(connection.url()).sslContext(sslContext);
 
         // AbstractKestraTask historically rejected a declared-but-blank apiToken next to username/password instead
         // of silently falling through to Basic; AbstractCloningTask never had that rule, so it stays rendered-value based below.

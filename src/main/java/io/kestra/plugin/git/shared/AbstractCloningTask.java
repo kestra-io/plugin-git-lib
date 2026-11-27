@@ -51,7 +51,7 @@ public abstract class AbstractCloningTask extends AbstractGitTask {
     protected Auth auth;
 
     protected KestraClient kestraClient(RunContext runContext) throws IllegalVariableEvaluationException {
-        return KestraApiConnection.buildClient(runContext, kestraUrl, auth, requireKestraAuthentication(), KestraTaskFamily.CLONING);
+        return KestraApiConnection.buildClient(runContext, kestraUrl, auth, requireKestraAuthentication(), KestraTaskFamily.CLONING, trustedCaSslContext(runContext).orElse(null));
     }
 
     /** Call from the catch block of a Kestra API call, as {@code throw explainKestraApiError(runContext, e)}: explains an untrusted server certificate, and returns {@code error} unchanged otherwise. */
