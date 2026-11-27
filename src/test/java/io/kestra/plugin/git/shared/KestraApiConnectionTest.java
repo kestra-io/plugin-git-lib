@@ -407,7 +407,7 @@ class KestraApiConnectionTest {
 
     @Test
     void descendantNamespaces_shouldExplainAnUntrustedCertificateOfARealApiCall() throws Exception {
-        char[] password = "changeit".toCharArray();
+        var password = "changeit".toCharArray();
         var keyStore = KeyStore.getInstance("PKCS12");
         try (var in = getClass().getResourceAsStream("/untrusted-localhost.p12")) {
             keyStore.load(in, password);

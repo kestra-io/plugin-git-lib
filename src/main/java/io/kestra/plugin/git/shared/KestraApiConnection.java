@@ -150,11 +150,7 @@ final class KestraApiConnection {
         return builder.noAuth().build();
     }
 
-    /**
-     * The error to throw for a failed Kestra API call: a message naming the Kestra API, instead of the raw TLS error
-     * that reads as a Git remote failure, when {@code error} has an {@link SSLHandshakeException} in its cause chain;
-     * {@code error} itself otherwise, including when it was already explained by an earlier call.
-     */
+    /** Wraps a TLS handshake failure with a Kestra API hint; returns {@code error} otherwise. */
     static RuntimeException explainApiError(RunContext runContext, @Nullable Property<String> kestraUrl, @Nullable KestraApiAuth auth, RuntimeException error) {
         Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
         for (Throwable cause = error; cause != null && seen.add(cause); cause = cause.getCause()) {
@@ -199,7 +195,7 @@ final class KestraApiConnection {
             return null;
         }
         try {
-            URI uri = new URI(url);
+            var uri = new URI(url);
             if (uri.getScheme() == null || uri.getHost() == null) {
                 return UNPRINTABLE_URL;
             }
