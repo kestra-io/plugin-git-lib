@@ -1,6 +1,7 @@
 package io.kestra.plugin.git.shared;
 
 import java.io.*;
+import java.lang.ref.WeakReference;
 import java.net.Proxy;
 import java.net.URI;
 import java.net.URL;
@@ -10,7 +11,6 @@ import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.security.KeyStore;
-import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
@@ -37,6 +37,7 @@ import org.eclipse.jgit.transport.http.apache.HttpClientConnection;
 import org.eclipse.jgit.transport.http.apache.HttpClientConnectionFactory;
 import org.eclipse.jgit.treewalk.EmptyTreeIterator;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -50,6 +51,7 @@ import io.kestra.plugin.git.shared.services.CloneService;
 import io.kestra.plugin.git.shared.services.GitService;
 import io.kestra.plugin.git.shared.services.JGitCleanupIsolation;
 import io.kestra.plugin.git.shared.services.SshTransportConfigCallback;
+import io.kestra.plugin.git.shared.services.TaskTransportConfigCallback;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.*;
@@ -69,11 +71,13 @@ import io.kestra.core.models.annotations.PluginProperty;
 public abstract class AbstractGitTask extends Task {
     private static final Pattern PEBBLE_TEMPLATE_PATTERN = Pattern.compile("^\\s*\\{\\{");
 
-    // Replaces the boolean flag with a configuration key to allow reconfiguration when the PEM changes.
-    // Possible values: "JVM" or "PEM:<sha256-of-file-bytes>"
-    private static final AtomicReference<String> SSL_CONFIGURED_KEY = new AtomicReference<>(null);
-    private static final Object SSL_CONFIG_LOCK = new Object();
     private static final int MAX_PEM_BYTES = 1024 * 1024;
+
+    @Getter(AccessLevel.NONE)
+    @JsonIgnore
+    @EqualsAndHashCode.Exclude
+    @ToString.Exclude
+    private final transient AtomicReference<TrustedCa> trustedCaCache = new AtomicReference<>();
 
     // Namespace-first Git layout used by every namespace/tenant sync task: <namespace>/flows, <namespace>/files.
     private static final String FLOWS_DIR = "flows";
@@ -170,7 +174,7 @@ public abstract class AbstractGitTask extends Task {
         description = """
             Optional PEM-encoded CA bundle, trusted in addition to the JVM truststore for HTTPS connections to the \
             Kestra API (`kestraUrl`) and to the Git remote. Equivalent to `git config http.sslCAInfo <path>` for \
-            self-signed or internal CAs. `NamespaceSync` and `TenantSync` do not apply it to the Git remote yet."""
+            self-signed or internal CAs. The CA applies only to the task that sets it, not to other tasks running on the same worker."""
     )
     @PluginProperty(group = "advanced")
     protected Property<String> trustedCaPemPath;
@@ -263,43 +267,14 @@ public abstract class AbstractGitTask extends Task {
     }
 
     /**
-     * Installs a composite trust manager (PEM trust + JVM trust) as the JVM-global default SSLContext when
-     * {@code trustedCaPemPath} is set. This method is a no-op when no custom CA is configured: the shared kernel
-     * is compiled separately into the OSS and Enterprise Edition jars, each with its own {@link #SSL_CONFIGURED_KEY}
-     * cache, but both mutate the same JVM-global default SSLContext ({@link SSLContext#setDefault}). Resetting it
-     * to the JVM default here would let a task in one edition silently undo a custom CA installed by a task in the
-     * other edition. Idempotent for the custom-CA case: reconfigures if and only if the PEM content changes.
+     * No-op kept for binary compatibility with consumers that still call it.
+     *
+     * @deprecated the CA is now applied per command, to this task's transport only, by
+     *             {@link #authentified(TransportCommand, RunContext)}; nothing is installed JVM-wide anymore.
      */
+    @Deprecated(forRemoval = true)
     protected void configureEnvironmentWithSsl(RunContext runContext) throws Exception {
-        var rPemPath = renderTrustedCaPemPath(runContext);
-        if (rPemPath.isEmpty()) {
-            return;
-        }
-
-        var desiredKey = computeDesiredSslKey(rPemPath.get());
-
-        // Fast-path: already configured with this key
-        if (desiredKey.equals(SSL_CONFIGURED_KEY.get())) {
-            runContext.logger().debug("SSLContext already configured with key: {}", desiredKey);
-            return;
-        }
-
-        synchronized (SSL_CONFIG_LOCK) {
-            if (desiredKey.equals(SSL_CONFIGURED_KEY.get())) {
-                return;
-            }
-
-            var sslContext = buildSslContext(rPemPath.get());
-            runContext.logger().info("Configured SSLContext with PEM: {}", rPemPath.get());
-
-            // Apply as global defaults for JGit/HttpClient
-            SSLContext.setDefault(sslContext);
-            HttpsURLConnection.setDefaultSSLSocketFactory(sslContext.getSocketFactory());
-            // Keep default HostnameVerifier (strict)
-
-            SSL_CONFIGURED_KEY.set(desiredKey);
-            runContext.logger().debug("SSL configured key now: {}", desiredKey);
-        }
+        // intentionally empty
     }
 
     /**
@@ -309,12 +284,33 @@ public abstract class AbstractGitTask extends Task {
      * @throws IllegalArgumentException if the file is missing or holds no certificate; the message names the path
      */
     protected Optional<SSLContext> trustedCaSslContext(RunContext runContext) throws IllegalVariableEvaluationException {
+        return trustedCa(runContext).map(TrustedCa::sslContext);
+    }
+
+    /** Trust managers (PEM + JVM truststore) for the Git transport; empty when {@code trustedCaPemPath} is unset. */
+    protected Optional<TrustManager[]> trustedCaTrustManagers(RunContext runContext) throws IllegalVariableEvaluationException {
+        return trustedCa(runContext).map(TrustedCa::trustManagers);
+    }
+
+    // Memoized per RunContext so a sync of N resources reads the PEM once; a different RunContext rebuilds it.
+    private Optional<TrustedCa> trustedCa(RunContext runContext) throws IllegalVariableEvaluationException {
         var rPemPath = renderTrustedCaPemPath(runContext);
         if (rPemPath.isEmpty()) {
             return Optional.empty();
         }
+
+        var cached = trustedCaCache.get();
+        if (cached != null && cached.runContext().get() == runContext && cached.pemPath().equals(rPemPath.get())) {
+            return Optional.of(cached);
+        }
+
         try {
-            return Optional.of(buildSslContext(rPemPath.get()));
+            var trustManagers = new TrustManager[] { buildCompositeTrustManager(Path.of(rPemPath.get())) };
+            var sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(null, trustManagers, new SecureRandom());
+            var built = new TrustedCa(new WeakReference<>(runContext), rPemPath.get(), trustManagers, sslContext);
+            trustedCaCache.set(built);
+            return Optional.of(built);
         } catch (PemFileRejectedException e) {
             throw e;
         } catch (Exception e) {
@@ -330,6 +326,10 @@ public abstract class AbstractGitTask extends Task {
         }
     }
 
+    // Weak key: the cache must not keep a finished run's RunContext reachable for the lifetime of the task instance.
+    private record TrustedCa(WeakReference<RunContext> runContext, String pemPath, TrustManager[] trustManagers, SSLContext sslContext) {
+    }
+
     private Optional<String> renderTrustedCaPemPath(RunContext runContext) throws IllegalVariableEvaluationException {
         if (trustedCaPemPath == null) {
             return Optional.empty();
@@ -337,14 +337,10 @@ public abstract class AbstractGitTask extends Task {
         return runContext.render(trustedCaPemPath).as(String.class).filter(path -> !path.isBlank());
     }
 
-    private static SSLContext buildSslContext(String pemPath) throws Exception {
-        var sslContext = SSLContext.getInstance("TLS");
-        // Composite TrustManager: [custom-from-PEM, jvm-default]
-        var customTm = buildTrustManagerFromPem(Path.of(pemPath));
+    private static X509TrustManager buildCompositeTrustManager(Path pemFile) throws Exception {
+        var customTm = buildTrustManagerFromPem(pemFile);
         var jvmTm = buildJvmDefaultTrustManager();
-        var composite = new CompositeX509TrustManager(List.of(customTm, jvmTm));
-        sslContext.init(null, new TrustManager[] { composite }, new SecureRandom());
-        return sslContext;
+        return new CompositeX509TrustManager(List.of(customTm, jvmTm));
     }
 
     /**
@@ -377,13 +373,6 @@ public abstract class AbstractGitTask extends Task {
             super("Cannot load the CA certificates from `trustedCaPemPath` '" + pemFile + "': " + reason
                 + ". Point it at a PEM file of at most 1 MiB.");
         }
-    }
-
-    // Builds a key representing the desired SSL configuration: "PEM:<sha256-of-bytes>" of the trusted CA file.
-    private static String computeDesiredSslKey(String pemPath) throws Exception {
-        var bytes = readPemBytes(Path.of(pemPath));
-        byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
-        return "PEM:" + Base64.getEncoder().encodeToString(digest);
     }
 
     private static X509TrustManager buildJvmDefaultTrustManager() throws Exception {
@@ -504,15 +493,21 @@ public abstract class AbstractGitTask extends Task {
             );
         }
 
+        SshTransportConfigCallback sshCallback = null;
         if (this.privateKey != null) {
-            command.setTransportConfigCallback(
-                new SshTransportConfigCallback(
-                    runContext.render(this.privateKey).as(String.class).orElseThrow().getBytes(StandardCharsets.UTF_8),
-                    runContext.render(this.passphrase).as(String.class).orElse(null),
-                    runContext.render(this.strictHostKeyChecking).as(Boolean.class).orElseGet(this::defaultStrictHostKeyChecking),
-                    runContext.render(this.knownHosts).as(String.class).orElse(null)
-                )
+            sshCallback = new SshTransportConfigCallback(
+                runContext.render(this.privateKey).as(String.class).orElseThrow().getBytes(StandardCharsets.UTF_8),
+                runContext.render(this.passphrase).as(String.class).orElse(null),
+                runContext.render(this.strictHostKeyChecking).as(Boolean.class).orElseGet(this::defaultStrictHostKeyChecking),
+                runContext.render(this.knownHosts).as(String.class).orElse(null)
             );
+        }
+        var trustManagers = trustedCaTrustManagers(runContext).orElse(null);
+
+        if (trustManagers != null) {
+            command.setTransportConfigCallback(new TaskTransportConfigCallback(sshCallback, trustManagers));
+        } else if (sshCallback != null) {
+            command.setTransportConfigCallback(sshCallback);
         }
 
         return command;
